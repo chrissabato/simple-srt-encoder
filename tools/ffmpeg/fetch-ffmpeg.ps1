@@ -22,7 +22,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$repoRoot = Split-Path -Parent $PSScriptRoot
+# This script lives at tools/ffmpeg/ — up two levels, not one, to reach the repo root.
+$repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $destDir = Join-Path $repoRoot "ui\SrtEncoderApp\ffmpeg"
 $destExe = Join-Path $destDir "ffmpeg.exe"
 $zipUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/$Tag/ffmpeg-master-latest-win64-gpl.zip"
