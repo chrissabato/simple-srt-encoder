@@ -5,16 +5,111 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:local="using:SrtEncoderApp"
+    xmlns:Models="using:SrtEncoderApp.Models"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
 
-    <Grid>
-        <StackPanel
-            HorizontalAlignment="Center"
-            VerticalAlignment="Center"
-            Spacing="8">
-            <TextBlock Text="SRT Encoder" Style="{StaticResource TitleTextBlockStyle}" />
-            <TextBlock x:Name="NativeCoreStatusText" Style="{StaticResource BodyTextBlockStyle}" />
-        </StackPanel>
+    <Grid Padding="16" ColumnSpacing="16">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="2*" />
+            <ColumnDefinition Width="1*" MinWidth="340" />
+        </Grid.ColumnDefinitions>
+
+        <!-- Left: device selection, preview, status -->
+        <Grid Grid.Column="0" RowSpacing="12">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="8">
+                <ComboBox
+                    x:Name="DeviceComboBox"
+                    Width="320"
+                    PlaceholderText="Select a video source..."
+                    ItemsSource="{x:Bind ViewModel.Devices}"
+                    SelectedItem="{x:Bind ViewModel.SelectedDevice, Mode=TwoWay}" />
+                <Button Content="Refresh" Click="RefreshDevicesButton_Click" />
+                <Button Content="Open" Click="OpenDeviceButton_Click" />
+                <Button Content="Close" Click="CloseDeviceButton_Click" IsEnabled="{x:Bind ViewModel.IsDeviceOpen, Mode=OneWay}" />
+            </StackPanel>
+
+            <Border Grid.Row="1" Background="{ThemeResource LayerFillColorDefaultBrush}" CornerRadius="4">
+                <Image x:Name="PreviewImage" Stretch="Uniform" />
+            </Border>
+
+            <Grid Grid.Row="2" Background="{ThemeResource LayerFillColorDefaultBrush}" Padding="12,8" CornerRadius="4" ColumnSpacing="20">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="{x:Bind FormatConnectionState(ViewModel.Stats.ConnectionState), Mode=OneWay}" FontWeight="SemiBold" />
+                <TextBlock Grid.Column="1" Text="{x:Bind FormatBitrate(ViewModel.Stats.BitrateKbps), Mode=OneWay}" />
+                <TextBlock Grid.Column="2" Text="{x:Bind FormatFps(ViewModel.Stats.Fps), Mode=OneWay}" />
+                <TextBlock Grid.Column="3" Text="{x:Bind FormatDropped(ViewModel.Stats.DroppedFrames), Mode=OneWay}" />
+                <TextBlock Grid.Column="4" Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" Opacity="0.7" TextTrimming="CharacterEllipsis" />
+                <Button Grid.Column="5" x:Name="StreamToggleButton" Content="Start Streaming" Click="StreamToggleButton_Click" IsEnabled="{x:Bind ViewModel.IsDeviceOpen, Mode=OneWay}" />
+            </Grid>
+        </Grid>
+
+        <!-- Right: settings + presets -->
+        <ScrollViewer Grid.Column="1">
+            <StackPanel Spacing="16">
+
+                <StackPanel Spacing="8">
+                    <TextBlock Text="Encode" Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <TextBox Header="Encoder (libx264, h264_nvenc, ...)" Text="{x:Bind ViewModel.EncoderImpl, Mode=TwoWay}" />
+                    <TextBox Header="Rate control (cbr / vbr)" Text="{x:Bind ViewModel.RateControl, Mode=TwoWay}" />
+                    <NumberBox Header="Bitrate (kbps)" Value="{x:Bind ViewModel.BitrateKbps, Mode=TwoWay}" SpinButtonPlacementMode="Compact" Minimum="100" />
+                    <NumberBox Header="Max bitrate (kbps)" Value="{x:Bind ViewModel.MaxBitrateKbps, Mode=TwoWay}" SpinButtonPlacementMode="Compact" Minimum="100" />
+                    <NumberBox Header="Buffer size (kbps)" Value="{x:Bind ViewModel.BufferSizeKbps, Mode=TwoWay}" SpinButtonPlacementMode="Compact" Minimum="100" />
+                    <NumberBox Header="Keyframe interval (sec)" Value="{x:Bind ViewModel.KeyframeIntervalSec, Mode=TwoWay}" SpinButtonPlacementMode="Compact" Minimum="1" />
+                    <TextBox Header="x264 preset (veryfast, ...)" Text="{x:Bind ViewModel.X264Preset, Mode=TwoWay}" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <NumberBox Header="Output width" Value="{x:Bind ViewModel.OutputWidth, Mode=TwoWay}" SpinButtonPlacementMode="Compact" Minimum="16" Width="150" />
+                        <NumberBox Header="Output height" Value="{x:Bind ViewModel.OutputHeight, Mode=TwoWay}" SpinButtonPlacementMode="Compact" Minimum="16" Width="150" />
+                    </StackPanel>
+                    <NumberBox Header="Output frame rate (fps)" Value="{x:Bind ViewModel.OutputFrameRate, Mode=TwoWay}" SpinButtonPlacementMode="Compact" Minimum="1" Maximum="120" />
+                </StackPanel>
+
+                <StackPanel Spacing="8">
+                    <TextBlock Text="SRT" Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <TextBox Header="Mode (caller / listener / rendezvous)" Text="{x:Bind ViewModel.SrtMode, Mode=TwoWay}" />
+                    <TextBox Header="Host" Text="{x:Bind ViewModel.Host, Mode=TwoWay}" />
+                    <NumberBox Header="Port" Value="{x:Bind ViewModel.Port, Mode=TwoWay}" SpinButtonPlacementMode="Compact" Minimum="1" Maximum="65535" />
+                    <NumberBox Header="Latency (ms)" Value="{x:Bind ViewModel.LatencyMs, Mode=TwoWay}" SpinButtonPlacementMode="Compact" Minimum="20" />
+                    <PasswordBox x:Name="PassphraseBox" Header="Passphrase (leave blank to keep existing)" />
+                    <NumberBox Header="Key length (0, 16, 24, 32)" Value="{x:Bind ViewModel.PbKeyLen, Mode=TwoWay}" SpinButtonPlacementMode="Compact" Minimum="0" Maximum="32" />
+                    <TextBox Header="Stream ID" Text="{x:Bind ViewModel.StreamId, Mode=TwoWay}" />
+                </StackPanel>
+
+                <StackPanel Spacing="8">
+                    <TextBlock Text="Presets" Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <ListView
+                        x:Name="PresetListView"
+                        Height="160"
+                        ItemsSource="{x:Bind ViewModel.Presets}"
+                        SelectedItem="{x:Bind ViewModel.SelectedPreset, Mode=TwoWay}"
+                        SelectionChanged="PresetListView_SelectionChanged">
+                        <ListView.ItemTemplate>
+                            <DataTemplate x:DataType="Models:Preset">
+                                <TextBlock Text="{x:Bind Name}" />
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                    <TextBox x:Name="PresetNameBox" Header="Preset name" PlaceholderText="My preset" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Content="Save" Click="SavePresetButton_Click" />
+                        <Button Content="Delete" Click="DeletePresetButton_Click" />
+                    </StackPanel>
+                </StackPanel>
+
+            </StackPanel>
+        </ScrollViewer>
     </Grid>
 </Page>

@@ -45,4 +45,45 @@ internal static partial class NativeMethods
             }
         });
     }
+
+    // The remaining calls carry structs with embedded fixed-size strings
+    // ([MarshalAs(UnmanagedType.ByValTStr)] in NativeStructs.cs), which the
+    // LibraryImport source generator doesn't support — classic DllImport marshaling
+    // handles these natively and is the better fit here.
+
+    [DllImport(CaptureCoreLibrary, CallingConvention = CallingConvention.Cdecl)]
+    public static extern nint CaptureCore_Create();
+
+    [DllImport(CaptureCoreLibrary, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void CaptureCore_Destroy(nint handle);
+
+    [DllImport(CaptureCoreLibrary, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int CaptureCore_IsBackendAvailable(CcBackendType backend);
+
+    [DllImport(CaptureCoreLibrary, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int CaptureCore_EnumerateDevices(nint handle, [Out] CcDeviceInfo[] outArray, int maxCount);
+
+    [DllImport(CaptureCoreLibrary, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int CaptureCore_OpenSource(nint handle, in CcDeviceId id, in CcCaptureFormat format);
+
+    [DllImport(CaptureCoreLibrary, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void CaptureCore_CloseSource(nint handle);
+
+    [DllImport(CaptureCoreLibrary, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int CaptureCore_GetOpenSourceSize(nint handle, out int outWidth, out int outHeight);
+
+    [DllImport(CaptureCoreLibrary, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int CaptureCore_TryGetLatestFrame(nint handle, ref CcFrameBuffer outFrame);
+
+    [DllImport(CaptureCoreLibrary, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int CaptureCore_StartStream(nint handle, in CcEncodeSettings encode, in CcSrtSettings srt);
+
+    [DllImport(CaptureCoreLibrary, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void CaptureCore_StopStream(nint handle);
+
+    [DllImport(CaptureCoreLibrary, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int CaptureCore_IsStreaming(nint handle);
+
+    [DllImport(CaptureCoreLibrary, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int CaptureCore_GetStreamStats(nint handle, out CcStreamStats outStats);
 }

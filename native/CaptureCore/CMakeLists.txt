@@ -1,5 +1,11 @@
 set(CAPTURECORE_SOURCES
     src/CaptureCoreApi.cpp
+    src/capture/CaptureManager.cpp
+    src/capture/uvc/UvcDeviceEnumerator.cpp
+    src/capture/uvc/UvcCaptureSource.cpp
+    src/encode/SrtUrlBuilder.cpp
+    src/encode/FramePipeWriter.cpp
+    src/encode/FfmpegProcessController.cpp
 )
 
 # --- Optional backends -------------------------------------------------------
@@ -30,6 +36,10 @@ target_include_directories(CaptureCore
 )
 
 target_compile_definitions(CaptureCore PRIVATE CAPTURECORE_EXPORTS)
+
+# UVC capture (Media Foundation) and process/pipe control (encode/SRT pipeline) are
+# always built — no proprietary SDK needed.
+target_link_libraries(CaptureCore PRIVATE mfplat mfreadwrite mfuuid ole32)
 
 if(ENABLE_DECKLINK)
     message(STATUS "CaptureCore: DeckLink backend ENABLED (SDK found at ${DeckLinkSDK_INCLUDE_DIR})")

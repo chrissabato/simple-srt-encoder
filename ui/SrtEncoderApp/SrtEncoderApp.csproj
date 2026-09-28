@@ -54,6 +54,9 @@
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="*" />
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="*" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools.WinApp" Version="*" />
+    <!-- DPAPI (ProtectedData) for encrypting SRT passphrases at rest in presets; not
+         part of the base BCL on .NET Core/5+, even on Windows-specific TFMs. -->
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
   </ItemGroup>
 
   <!--
@@ -93,4 +96,16 @@
     <Copy SourceFiles="@(NativeCoreFiles)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" Condition="'@(NativeCoreFiles)' != ''" />
     <Warning Text="CaptureCore.dll not found at $(NativeCoreBinDir) — build native/ first (see build.ps1 at the repo root). The app will run but show a fallback message until then." Condition="!Exists('$(NativeCoreBinDir)CaptureCore.dll')" />
   </Target>
+
+  <!--
+    ffmpeg.exe (fetched by tools/ffmpeg/fetch-ffmpeg.ps1, not committed to git — see
+    .gitignore) is bundled as Content when present, so `dotnet publish` carries it along.
+    Streaming will fail with a clear error from FfmpegProcessController if it's missing;
+    the Condition just keeps the build itself from failing when it hasn't been fetched yet.
+  -->
+  <ItemGroup>
+    <Content Include="ffmpeg\ffmpeg.exe" Condition="Exists('ffmpeg\ffmpeg.exe')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
 </Project>
