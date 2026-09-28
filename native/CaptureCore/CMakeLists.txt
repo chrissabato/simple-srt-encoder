@@ -37,9 +37,16 @@ target_include_directories(CaptureCore
 
 target_compile_definitions(CaptureCore PRIVATE CAPTURECORE_EXPORTS)
 
+# windows.h's min/max macros collide with std::min/std::max (C2589 "illegal token on
+# right side of '::'"), and enough files here transitively pull in windows.h (via
+# Media Foundation headers, not just direct #include <windows.h>) that defining this
+# once for the whole target is more robust than chasing include order per file.
+target_compile_definitions(CaptureCore PRIVATE NOMINMAX)
+
 # UVC capture (Media Foundation) and process/pipe control (encode/SRT pipeline) are
-# always built — no proprietary SDK needed.
-target_link_libraries(CaptureCore PRIVATE mfplat mfreadwrite mfuuid ole32)
+# always built — no proprietary SDK needed. mf.lib specifically is needed for
+# MFEnumDeviceSources (device enumeration), separate from mfplat.lib.
+target_link_libraries(CaptureCore PRIVATE mf mfplat mfreadwrite mfuuid ole32)
 
 if(ENABLE_DECKLINK)
     message(STATUS "CaptureCore: DeckLink backend ENABLED (SDK found at ${DeckLinkSDK_INCLUDE_DIR})")

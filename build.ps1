@@ -32,20 +32,64 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = $PSScriptRoot
 $preset = if ($Configuration -eq 'Debug') { 'x64-debug' } else { 'x64-release' }
 
-if (-not $SkipNative) {
-    $cmake = Get-Command cmake.exe -ErrorAction SilentlyContinue
-    if (-not $cmake) {
-        Write-Warning "cmake.exe not found on PATH. Install the 'Desktop development with C++' workload in Visual Studio (brings CMake + Ninja), then re-run, or pass -SkipNative to build the UI only."
-        exit 1
+function Find-VsDevCmd {
+    $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+    if (-not (Test-Path $vswhere)) {
+        return $null
     }
+    $vsInstallPath = & $vswhere -latest -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+    if (-not $vsInstallPath) {
+        return $null
+    }
+    $vsDevCmd = Join-Path $vsInstallPath "Common7\Tools\VsDevCmd.bat"
+    if (Test-Path $vsDevCmd) { return $vsDevCmd }
+    return $null
+}
 
-    Write-Host "==> Configuring native/ ($preset)" -ForegroundColor Cyan
-    cmake --preset $preset -S "$repoRoot/native"
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+if (-not $SkipNative) {
+    # `cmake --build --preset` (unlike configure) has no -S flag — it looks for
+    # CMakePresets.json relative to the current directory, so both calls need to run
+    # from native/, not the repo root.
+    $hasCmakeOnPath = [bool](Get-Command cmake.exe -ErrorAction SilentlyContinue)
 
-    Write-Host "==> Building native/ ($preset)" -ForegroundColor Cyan
-    cmake --build --preset $preset
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    if ($hasCmakeOnPath) {
+        Write-Host "==> Configuring native/ ($preset)" -ForegroundColor Cyan
+        Push-Location "$repoRoot/native"
+        try {
+            cmake --preset $preset
+            if ($LASTEXITCODE -ne 0) { throw "cmake configure failed (exit $LASTEXITCODE)" }
+            Write-Host "==> Building native/ ($preset)" -ForegroundColor Cyan
+            cmake --build --preset $preset
+            if ($LASTEXITCODE -ne 0) { throw "cmake build failed (exit $LASTEXITCODE)" }
+        }
+        finally {
+            Pop-Location
+        }
+    }
+    else {
+        # cmake/ninja/cl.exe live under the VS install tree, not the global PATH,
+        # unless this script is already running inside a "Developer PowerShell for VS"
+        # session. Run the whole native build inside one cmd.exe subprocess that
+        # sources VsDevCmd.bat first — deliberately NOT importing those environment
+        # variables into *this* PowerShell process, since VsDevCmd.bat sets things
+        # (e.g. a bare `Platform` variable) that break the `dotnet build` step below
+        # if they leak into it.
+        $vsDevCmd = Find-VsDevCmd
+        if (-not $vsDevCmd) {
+            Write-Warning "cmake.exe not found, and no Visual Studio install with the C++ workload was found either. Install the 'Desktop development with C++' workload in Visual Studio (brings CMake + Ninja), then re-run, or pass -SkipNative to build the UI only."
+            exit 1
+        }
+
+        Write-Host "==> Configuring + building native/ ($preset) via $vsDevCmd" -ForegroundColor Cyan
+        $nativeDir = (Resolve-Path "$repoRoot/native").Path
+        # VsDevCmd.bat internally shells out to a bare "vswhere.exe"; add its directory
+        # to PATH for this subprocess only (scoped via `set`, not $env:PATH, so it
+        # doesn't leak into the rest of this script).
+        $vswhereDir = Split-Path "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -Parent
+        $cmd = "set `"PATH=$vswhereDir;%PATH%`" && call `"$vsDevCmd`" -arch=x64 -no_logo && cd /d `"$nativeDir`" && cmake --preset $preset && cmake --build --preset $preset"
+        cmd /c $cmd
+        if ($LASTEXITCODE -ne 0) { throw "native build failed (exit $LASTEXITCODE)" }
+    }
 }
 else {
     Write-Host "==> Skipping native build (-SkipNative)" -ForegroundColor Yellow

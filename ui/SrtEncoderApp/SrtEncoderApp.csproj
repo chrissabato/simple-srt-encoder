@@ -78,9 +78,14 @@
 
   <!--
     Native core (CaptureCore.dll, built from native/ via CMake — see build.ps1 at the repo
-    root) is not a project reference; it's copied into the app's output directory after
-    build. NativeCoreBinDir can be overridden, e.g. `dotnet build -p:NativeCoreBinDir=...`,
-    so this never depends on a hardcoded absolute path.
+    root) is not a project reference; it's included as a Content item so it lands both in
+    the plain output directory AND in the AppX staging folder that the single-project MSIX
+    packaging step builds for `dotnet run`/packaged launches (a plain post-Build <Copy>
+    task reaches the former but not the latter — the packaging step only picks up files
+    declared as MSBuild items, not arbitrary files copied by another target).
+    NativeCoreBinDir can be overridden, e.g. `dotnet build -p:NativeCoreBinDir=...`, so this
+    never depends on a hardcoded absolute path. Evaluated at project-load time against
+    whatever's on disk then, which is why build.ps1 always builds native/ before ui/.
   -->
   <PropertyGroup>
     <NativeCorePreset Condition="'$(Configuration)' == 'Debug'">x64-debug</NativeCorePreset>
@@ -88,12 +93,18 @@
     <NativeCoreBinDir Condition="'$(NativeCoreBinDir)' == ''">$(MSBuildThisFileDirectory)..\..\native\build\$(NativeCorePreset)\bin\</NativeCoreBinDir>
   </PropertyGroup>
 
-  <Target Name="CopyNativeCore" AfterTargets="Build">
-    <ItemGroup>
-      <NativeCoreFiles Include="$(NativeCoreBinDir)CaptureCore.dll" Condition="Exists('$(NativeCoreBinDir)CaptureCore.dll')" />
-      <NativeCoreFiles Include="$(NativeCoreBinDir)CaptureCore.pdb" Condition="Exists('$(NativeCoreBinDir)CaptureCore.pdb')" />
-    </ItemGroup>
-    <Copy SourceFiles="@(NativeCoreFiles)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" Condition="'@(NativeCoreFiles)' != ''" />
+  <ItemGroup>
+    <Content Include="$(NativeCoreBinDir)CaptureCore.dll" Condition="Exists('$(NativeCoreBinDir)CaptureCore.dll')">
+      <Link>CaptureCore.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="$(NativeCoreBinDir)CaptureCore.pdb" Condition="Exists('$(NativeCoreBinDir)CaptureCore.pdb')">
+      <Link>CaptureCore.pdb</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <Target Name="WarnIfNativeCoreMissing" BeforeTargets="Build">
     <Warning Text="CaptureCore.dll not found at $(NativeCoreBinDir) — build native/ first (see build.ps1 at the repo root). The app will run but show a fallback message until then." Condition="!Exists('$(NativeCoreBinDir)CaptureCore.dll')" />
   </Target>
 
