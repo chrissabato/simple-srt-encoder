@@ -1,0 +1,15 @@
+{
+  "//": "Copy this file to CMakeUserPresets.json (gitignored) to set machine-local overrides, e.g. SDK paths if you'd rather not use the DECKLINK_SDK_DIR / NDI_SDK_DIR environment variables.",
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "x64-debug-local",
+      "inherits": "x64-debug",
+      "cacheVariables": {
+        "DeckLinkSDK_INCLUDE_DIR": "C:/SDKs/BlackmagicDeckLinkSDK/Win/include",
+        "NdiSDK_INCLUDE_DIR": "C:/Program Files/NDI/NDI 6 SDK/Include",
+        "NdiSDK_LIBRARY": "C:/Program Files/NDI/NDI 6 SDK/Lib/x64/Processing.NDI.Lib.x64.lib"
+      }
+    }
+  ]
+}

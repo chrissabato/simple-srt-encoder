@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "SrtEncoderApp (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "SrtEncoderApp (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}

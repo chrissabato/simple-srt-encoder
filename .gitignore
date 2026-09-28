@@ -1,0 +1,23 @@
+# Native (CMake) build output
+native/build/
+native/CMakeUserPresets.json
+
+# Proprietary SDKs dropped locally (DeckLink/NDI) — never redistributable, never committed
+native/vendor/*
+!native/vendor/README.md
+
+# FFmpeg binary, fetched by tools/ffmpeg/fetch-ffmpeg.ps1 — licensed, not committed
+ui/SrtEncoderApp/ffmpeg/
+
+# Visual Studio / editor
+.vs/
+*.user
+*.suo
+
+# .NET (root-level catch-all; ui/SrtEncoderApp/.gitignore also covers this locally)
+[Bb]in/
+[Oo]bj/
+
+# OS cruft
+Thumbs.db
+.DS_Store
