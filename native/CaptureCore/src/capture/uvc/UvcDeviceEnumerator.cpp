@@ -1,5 +1,6 @@
 #include "UvcDeviceEnumerator.h"
 #include "UvcCaptureSource.h"
+#include "../../Diagnostics.h"
 
 #include <mfapi.h>
 #include <mfidl.h>
@@ -83,8 +84,11 @@ std::vector<CcDeviceInfo> UvcDeviceEnumerator::Enumerate() {
 }
 
 std::unique_ptr<ICaptureSource> UvcDeviceEnumerator::Open(const CcDeviceId& id, const CcCaptureFormat& format) {
+    LogDiagnostic(L"UvcDeviceEnumerator::Open requested id=" + std::wstring(id.value));
+
     ActivateArray activates;
     if (!EnumerateVideoCaptureActivates(activates)) {
+        LogDiagnostic(L"  EnumerateVideoCaptureActivates failed");
         return nullptr;
     }
 
@@ -100,18 +104,28 @@ std::unique_ptr<ICaptureSource> UvcDeviceEnumerator::Open(const CcDeviceId& id, 
             continue;
         }
 
+        LogDiagnostic(L"  matched device at index " + std::to_wstring(i) + L", activating...");
+
         ComPtr<IMFMediaSource> mediaSource;
-        if (FAILED(activates.items[i]->ActivateObject(IID_PPV_ARGS(&mediaSource)))) {
+        const HRESULT activateHr = activates.items[i]->ActivateObject(IID_PPV_ARGS(&mediaSource));
+        if (FAILED(activateHr)) {
+            LogDiagnostic(L"  ActivateObject FAILED hr=0x" + std::to_wstring(static_cast<unsigned long>(activateHr)));
             return nullptr;
         }
 
         try {
-            return std::make_unique<UvcCaptureSource>(std::move(mediaSource), format);
-        } catch (const std::exception&) {
+            LogDiagnostic(L"  ActivateObject OK, constructing UvcCaptureSource...");
+            auto source = std::make_unique<UvcCaptureSource>(std::move(mediaSource), format);
+            LogDiagnostic(L"  UvcCaptureSource constructed OK");
+            return source;
+        } catch (const std::exception& ex) {
+            std::string what = ex.what();
+            LogDiagnostic(L"  UvcCaptureSource threw: " + std::wstring(what.begin(), what.end()));
             return nullptr;
         }
     }
 
+    LogDiagnostic(L"  no matching device found among " + std::to_wstring(activates.count) + L" enumerated");
     return nullptr;
 }
 

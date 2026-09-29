@@ -1,5 +1,6 @@
 set(CAPTURECORE_SOURCES
     src/CaptureCoreApi.cpp
+    src/Diagnostics.cpp
     src/capture/CaptureManager.cpp
     src/capture/uvc/UvcDeviceEnumerator.cpp
     src/capture/uvc/UvcCaptureSource.cpp
