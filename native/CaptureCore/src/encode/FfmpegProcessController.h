@@ -50,6 +50,7 @@ private:
 
     PROCESS_INFORMATION m_processInfo{};
     HANDLE m_stdoutReadPipe = nullptr;
+    HANDLE m_stdinWritePipe = nullptr; // for sending ffmpeg's interactive 'q' quit command
     std::thread m_progressThread;
     std::atomic<bool> m_running{false};
     std::atomic<bool> m_stopRequested{false};

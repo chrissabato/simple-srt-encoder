@@ -1,5 +1,6 @@
 #include "FfmpegProcessController.h"
 #include "SrtUrlBuilder.h"
+#include "../Diagnostics.h"
 
 #include <algorithm>
 #include <sstream>
@@ -124,6 +125,18 @@ bool FfmpegProcessController::Start(
     }
     SetHandleInformation(m_stdoutReadPipe, HANDLE_FLAG_INHERIT, 0);
 
+    // stdin is a pipe (not NUL) so Stop() can ask ffmpeg to quit gracefully by writing
+    // 'q' — its documented interactive-mode quit command — rather than only ever
+    // force-killing it, which otherwise ends the SRT session abruptly (the receiving
+    // side sees a mid-stream I/O error instead of a clean close).
+    HANDLE stdinRead = nullptr;
+    if (!CreatePipe(&stdinRead, &m_stdinWritePipe, &pipeSecurity, 0)) {
+        CloseHandle(m_stdoutReadPipe);
+        m_stdoutReadPipe = nullptr;
+        return false;
+    }
+    SetHandleInformation(m_stdinWritePipe, HANDLE_FLAG_INHERIT, 0);
+
     HANDLE nulHandle = CreateFileW(
         L"NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
         &pipeSecurity, OPEN_EXISTING, 0, nullptr);
@@ -131,7 +144,7 @@ bool FfmpegProcessController::Start(
     STARTUPINFOW startupInfo{};
     startupInfo.cb = sizeof(STARTUPINFOW);
     startupInfo.dwFlags = STARTF_USESTDHANDLES;
-    startupInfo.hStdInput = nulHandle;
+    startupInfo.hStdInput = stdinRead;
     startupInfo.hStdOutput = stdoutWrite;
     startupInfo.hStdError = nulHandle;
 
@@ -155,6 +168,7 @@ bool FfmpegProcessController::Start(
     // The child has its own handles to these now (or failed to start); the parent's
     // copies must be closed so ReadFile on m_stdoutReadPipe unblocks on child exit.
     CloseHandle(stdoutWrite);
+    CloseHandle(stdinRead);
     if (nulHandle) {
         CloseHandle(nulHandle);
     }
@@ -162,6 +176,8 @@ bool FfmpegProcessController::Start(
     if (!created) {
         CloseHandle(m_stdoutReadPipe);
         m_stdoutReadPipe = nullptr;
+        CloseHandle(m_stdinWritePipe);
+        m_stdinWritePipe = nullptr;
         return false;
     }
 
@@ -177,6 +193,7 @@ bool FfmpegProcessController::Start(
 }
 
 void FfmpegProcessController::ProgressThreadMain() {
+    LogDiagnostic(L"ProgressThreadMain: started");
     std::string lineBuffer;
     char readBuffer[4096];
 
@@ -184,6 +201,8 @@ void FfmpegProcessController::ProgressThreadMain() {
         DWORD bytesRead = 0;
         const BOOL ok = ReadFile(m_stdoutReadPipe, readBuffer, sizeof(readBuffer), &bytesRead, nullptr);
         if (!ok || bytesRead == 0) {
+            LogDiagnostic(L"ProgressThreadMain: ReadFile ended (ok=" + std::wstring(ok ? L"yes" : L"no") +
+                          L" bytesRead=" + std::to_wstring(bytesRead) + L")");
             break; // pipe closed: ffmpeg exited
         }
         lineBuffer.append(readBuffer, bytesRead);
@@ -201,7 +220,9 @@ void FfmpegProcessController::ProgressThreadMain() {
         }
     }
 
+    LogDiagnostic(L"ProgressThreadMain: waiting for process exit...");
     WaitForSingleObject(m_processInfo.hProcess, INFINITE);
+    LogDiagnostic(L"ProgressThreadMain: process exited");
 
     {
         std::lock_guard<std::mutex> lock(m_statsMutex);
@@ -212,29 +233,56 @@ void FfmpegProcessController::ProgressThreadMain() {
         }
     }
     m_running.store(false);
+    LogDiagnostic(L"ProgressThreadMain: exiting");
 }
 
 void FfmpegProcessController::Stop() {
+    LogDiagnostic(L"FfmpegProcessController::Stop() called, running=" +
+                  std::wstring(m_running.load() ? L"yes" : L"no"));
     if (!m_running.load() && m_processInfo.hProcess == nullptr) {
+        LogDiagnostic(L"  already stopped, returning");
         return;
     }
 
     m_stopRequested.store(true);
 
     if (m_processInfo.hProcess) {
-        GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, m_processInfo.dwProcessId);
-        if (WaitForSingleObject(m_processInfo.hProcess, 2000) != WAIT_OBJECT_0) {
+        // Best-effort: ffmpeg's interactive keyboard-command handling on Windows reads
+        // via console APIs (PeekConsoleInput/ReadConsoleInput), which don't work on a
+        // redirected pipe — empirically confirmed this never gets picked up within any
+        // reasonable wait when stdin is piped (as it must be here). Left in as a no-cost
+        // attempt in case that ever changes, but Windows gives us no real path to a
+        // clean ffmpeg shutdown short of allocating it a real console just for this, so
+        // the wait is kept short rather than paying a multi-second penalty for a command
+        // that structurally can't be received. The SRT receiver sees an abrupt
+        // disconnect rather than a clean close as a result — acceptable for this app's
+        // use case (a dropped connection is routine for any SRT receiver to handle).
+        LogDiagnostic(L"  requesting graceful quit ('q' on stdin, best-effort)...");
+        if (m_stdinWritePipe) {
+            const char quitCommand[] = "q\n";
+            DWORD written = 0;
+            WriteFile(m_stdinWritePipe, quitCommand, sizeof(quitCommand) - 1, &written, nullptr);
+        }
+        if (WaitForSingleObject(m_processInfo.hProcess, 300) != WAIT_OBJECT_0) {
+            LogDiagnostic(L"  graceful quit didn't land, calling TerminateProcess...");
             TerminateProcess(m_processInfo.hProcess, 0);
         }
+        LogDiagnostic(L"  ffmpeg process ended");
     }
 
+    LogDiagnostic(L"  joining progress thread...");
     if (m_progressThread.joinable()) {
         m_progressThread.join();
     }
+    LogDiagnostic(L"  progress thread joined");
 
     if (m_stdoutReadPipe) {
         CloseHandle(m_stdoutReadPipe);
         m_stdoutReadPipe = nullptr;
+    }
+    if (m_stdinWritePipe) {
+        CloseHandle(m_stdinWritePipe);
+        m_stdinWritePipe = nullptr;
     }
     if (m_processInfo.hProcess) {
         CloseHandle(m_processInfo.hProcess);
@@ -247,6 +295,7 @@ void FfmpegProcessController::Stop() {
         m_stats.connectionState = CcConnectionState::Stopped;
     }
     m_running.store(false);
+    LogDiagnostic(L"FfmpegProcessController::Stop() done");
 }
 
 bool FfmpegProcessController::IsRunning() const {

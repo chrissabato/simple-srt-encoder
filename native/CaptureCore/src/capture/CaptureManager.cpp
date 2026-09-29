@@ -1,5 +1,6 @@
 #include "CaptureManager.h"
 #include "uvc/UvcDeviceEnumerator.h"
+#include "../Diagnostics.h"
 
 #include <algorithm>
 #include <chrono>
@@ -111,12 +112,17 @@ bool CaptureManager::StartStream(const CcEncodeSettings& encode, const CcSrtSett
 }
 
 void CaptureManager::StopStream() {
+    LogDiagnostic(L"CaptureManager::StopStream() called");
     m_streamingStopRequested.store(true);
+    LogDiagnostic(L"  calling m_ffmpeg.Stop()...");
     m_ffmpeg.Stop();
+    LogDiagnostic(L"  m_ffmpeg.Stop() returned; joining streaming thread...");
     if (m_streamingThread.joinable()) {
         m_streamingThread.join();
     }
+    LogDiagnostic(L"  streaming thread joined; resetting pipe writer...");
     m_pipeWriter.reset();
+    LogDiagnostic(L"CaptureManager::StopStream() done");
 }
 
 bool CaptureManager::IsStreaming() const {
@@ -128,12 +134,15 @@ CcStreamStats CaptureManager::GetStreamStats() const {
 }
 
 void CaptureManager::StreamingThreadMain(CcEncodeSettings encode, int32_t sourceWidth, int32_t sourceHeight) {
+    LogDiagnostic(L"StreamingThreadMain: started, waiting for pipe connection...");
     if (!m_pipeWriter->WaitForConnection(5000)) {
         // ffmpeg never connected (missing exe, crashed on startup, ...); GetStreamStats
         // will report Broken once the process exits, which FfmpegProcessController
         // detects independently.
+        LogDiagnostic(L"StreamingThreadMain: pipe connection timed out, exiting");
         return;
     }
+    LogDiagnostic(L"StreamingThreadMain: pipe connected, entering frame loop");
 
     // ICaptureSource always exposes tightly-packed BGRA32 (width*4 stride); any
     // driver row padding was already stripped by the capture backend (e.g.
@@ -152,6 +161,7 @@ void CaptureManager::StreamingThreadMain(CcEncodeSettings encode, int32_t source
 
         if (TryGetLatestFrame(frame) && frame.width == sourceWidth && frame.height == sourceHeight) {
             if (!m_pipeWriter->WriteFrame(frameBuffer.data(), frameBuffer.size())) {
+                LogDiagnostic(L"StreamingThreadMain: WriteFrame failed, exiting loop");
                 break; // ffmpeg closed its end of the pipe (exited)
             }
         }
@@ -159,6 +169,9 @@ void CaptureManager::StreamingThreadMain(CcEncodeSettings encode, int32_t source
         nextFrameTime += std::chrono::duration_cast<std::chrono::steady_clock::duration>(frameInterval);
         std::this_thread::sleep_until(nextFrameTime);
     }
+    LogDiagnostic(L"StreamingThreadMain: exiting (stopRequested=" +
+                  std::wstring(m_streamingStopRequested.load() ? L"yes" : L"no") + L" ffmpegRunning=" +
+                  std::wstring(m_ffmpeg.IsRunning() ? L"yes" : L"no") + L")");
 }
 
 } // namespace capturecore
