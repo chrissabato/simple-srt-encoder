@@ -1,6 +1,8 @@
 using System.Runtime.InteropServices.WindowsRuntime;
 using Microsoft.UI.Dispatching;
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media.Imaging;
 using SrtEncoderApp.Interop;
 using SrtEncoderApp.Models;
@@ -21,6 +23,7 @@ public sealed partial class MainPage : Page
 
     private readonly DispatcherQueueTimer _previewTimer;
     private readonly DispatcherQueueTimer _statsTimer;
+    private readonly DispatcherQueueTimer _meterTimer;
 
     private WriteableBitmap? _previewBitmap;
     private byte[]? _previewBuffer;
@@ -42,7 +45,9 @@ public sealed partial class MainPage : Page
         }
 
         ViewModel.RefreshDevices();
+        ViewModel.RefreshAudioDevices();
         ViewModel.RefreshPresets();
+        _ = ViewModel.CheckForUpdatesAsync();
 
         var dispatcherQueue = DispatcherQueue.GetForCurrentThread();
 
@@ -56,13 +61,39 @@ public sealed partial class MainPage : Page
         _statsTimer.Tick += (_, _) => ViewModel.RefreshStats();
         _statsTimer.Start();
 
+        _meterTimer = dispatcherQueue.CreateTimer();
+        _meterTimer.Interval = TimeSpan.FromMilliseconds(100);
+        _meterTimer.Tick += (_, _) => UpdateLoudnessMeters();
+        _meterTimer.Start();
+
         Unloaded += (_, _) =>
         {
             _previewTimer.Stop();
             _statsTimer.Stop();
+            _meterTimer.Stop();
             ViewModel.Dispose();
         };
     }
+
+    private void UpdateLoudnessMeters()
+    {
+        var visibility = ViewModel.AudioEnabled ? Visibility.Visible : Visibility.Collapsed;
+        PreviewMeter.Visibility = visibility;
+        FullscreenMeter.Visibility = visibility;
+        if (visibility == Visibility.Collapsed)
+        {
+            return;
+        }
+
+        ViewModel.RefreshLoudness();
+        PreviewMeter.Update(ViewModel.Loudness);
+        if (FullscreenOverlay.Visibility == Visibility.Visible)
+        {
+            FullscreenMeter.Update(ViewModel.Loudness);
+        }
+    }
+
+    private void Meter_ResetRequested(object? sender, EventArgs e) => ViewModel.ResetLoudness();
 
     private void UpdatePreviewFrame()
     {
@@ -85,6 +116,7 @@ public sealed partial class MainPage : Page
             _previewWidth = width;
             _previewHeight = height;
             PreviewImage.Source = _previewBitmap;
+            FullscreenPreviewImage.Source = _previewBitmap;
         }
 
         if (!ViewModel.TryGetPreviewFrame(_previewBuffer!))
@@ -106,34 +138,80 @@ public sealed partial class MainPage : Page
         _previewBitmap.Invalidate();
     }
 
-    private void RefreshDevicesButton_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e) => ViewModel.RefreshDevices();
+    private void DeviceComboBox_DropDownOpened(object sender, object e) => ViewModel.RefreshDevices();
 
-    private void OpenDeviceButton_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e) => ViewModel.OpenSelectedDevice();
-
-    private void CloseDeviceButton_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+    private void DeviceComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        ViewModel.CloseDevice();
-        PreviewImage.Source = null;
-        _previewBitmap = null;
+        if (ViewModel.SelectedDevice is not null)
+        {
+            ViewModel.OpenSelectedDevice();
+        }
+    }
+
+    private void SettingsToggleButton_Click(object sender, RoutedEventArgs e) =>
+        SettingsPanel.Visibility = SettingsToggleButton.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+
+    private void RefreshAudioDevicesButton_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e) => ViewModel.RefreshAudioDevices();
+
+    private async void InstallUpdateButton_Click(object sender, RoutedEventArgs e) => await ViewModel.InstallUpdateAndRestartAsync();
+
+    private void FullscreenButton_Click(object sender, RoutedEventArgs e) => EnterFullscreen();
+
+    private void PreviewBorder_DoubleTapped(object sender, DoubleTappedRoutedEventArgs e) => EnterFullscreen();
+
+    private void ExitFullscreenButton_Click(object sender, RoutedEventArgs e) => ExitFullscreen();
+
+    private void FullscreenOverlay_DoubleTapped(object sender, DoubleTappedRoutedEventArgs e) => ExitFullscreen();
+
+    private void FullscreenOverlay_KeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Key == Windows.System.VirtualKey.Escape)
+        {
+            ExitFullscreen();
+        }
+    }
+
+    private void EnterFullscreen()
+    {
+        FullscreenOverlay.Visibility = Visibility.Visible;
+        FullscreenOverlay.Focus(FocusState.Programmatic);
+        (App.MainWindow as MainWindow)?.EnterFullscreen();
+    }
+
+    private void ExitFullscreen()
+    {
+        FullscreenOverlay.Visibility = Visibility.Collapsed;
+        (App.MainWindow as MainWindow)?.ExitFullscreen();
     }
 
     private void StreamToggleButton_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
     {
+        // Content is x:Bind'd to ViewModel.IsStreaming (see MainPage.xaml) rather than
+        // set here directly, so it also resets correctly if ffmpeg dies on its own and
+        // RefreshStats() flips IsStreaming back off — that used to leave this button
+        // stuck reading "Stop Streaming" even though nothing was streaming anymore.
         if (ViewModel.IsStreaming)
         {
             ViewModel.StopStreaming();
-            StreamToggleButton.Content = "Start Streaming";
         }
         else
         {
-            if (ViewModel.StartStreaming(PassphraseBox.Password))
-            {
-                StreamToggleButton.Content = "Stop Streaming";
-            }
+            ViewModel.StartStreaming(PassphraseBox.Password);
         }
     }
 
-    private void PresetListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private string FormatStreamButtonContent(bool isStreaming) => isStreaming ? "Stop Streaming" : "Start Streaming";
+
+    private bool IsBroken(ConnectionState state) => state == ConnectionState.Broken;
+
+    private void PresetListView_SelectionChanged(object sender, SelectionChangedEventArgs e) => ApplySelectedPresetFrom(e);
+
+    // Mirrors the Presets ListView in the settings panel — both are bound TwoWay to
+    // ViewModel.SelectedPreset, so selecting in either one keeps the other's selection in
+    // sync automatically; this handler just needs to apply the preset's values once.
+    private void PresetComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e) => ApplySelectedPresetFrom(e);
+
+    private void ApplySelectedPresetFrom(SelectionChangedEventArgs e)
     {
         // Read from the event args rather than ViewModel.SelectedPreset: the x:Bind
         // TwoWay update to that property and this handler both react to the same
@@ -146,14 +224,32 @@ public sealed partial class MainPage : Page
         }
     }
 
-    private void SavePresetButton_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+    private void NewPresetButton_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
     {
-        var name = string.IsNullOrWhiteSpace(PresetNameBox.Text) ? "Untitled preset" : PresetNameBox.Text.Trim();
-        ViewModel.SaveAsPreset(name, ViewModel.SelectedPreset?.Id, PassphraseBox.Password);
+        ViewModel.NewPreset();
+        PresetNameBox.Text = string.Empty;
         PassphraseBox.Password = string.Empty;
     }
 
-    private void DeletePresetButton_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e) => ViewModel.DeleteSelectedPreset();
+    private void SavePresetButton_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+    {
+        var name = string.IsNullOrWhiteSpace(PresetNameBox.Text) ? "Untitled preset" : PresetNameBox.Text.Trim();
+        if (ViewModel.SaveAsPreset(name, ViewModel.SelectedPreset?.Id, PassphraseBox.Password))
+        {
+            PassphraseBox.Password = string.Empty;
+        }
+        // On failure (duplicate name) the passphrase is deliberately left in the box —
+        // ViewModel.StatusText already explains why, and re-typing a DPAPI-protected
+        // passphrase after a rejected save would be an unnecessary extra step.
+    }
+
+    private void DeletePresetButton_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+    {
+        ViewModel.DeleteSelectedPreset();
+        PresetNameBox.Text = string.Empty;
+    }
+
+    private bool IsNotNull(object? value) => value is not null;
 
     private string FormatConnectionState(ConnectionState state) => state.ToString();
     private string FormatBitrate(double kbps) => $"{kbps:0} kbps";

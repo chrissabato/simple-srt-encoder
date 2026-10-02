@@ -9,67 +9,211 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
 
-    <Grid Padding="16" ColumnSpacing="16">
+    <Grid>
+    <Grid Padding="16">
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="2*" />
-            <ColumnDefinition Width="1*" MinWidth="340" />
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="Auto" />
         </Grid.ColumnDefinitions>
 
         <!-- Left: device selection, preview, status -->
         <Grid Grid.Column="0" RowSpacing="12">
             <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
-            <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="8">
-                <ComboBox
-                    x:Name="DeviceComboBox"
-                    Width="320"
-                    PlaceholderText="Select a video source..."
-                    ItemsSource="{x:Bind ViewModel.Devices}"
-                    SelectedItem="{x:Bind ViewModel.SelectedDevice, Mode=TwoWay}" />
-                <Button Content="Refresh" Click="RefreshDevicesButton_Click" />
-                <Button Content="Open" Click="OpenDeviceButton_Click" />
-                <Button Content="Close" Click="CloseDeviceButton_Click" IsEnabled="{x:Bind ViewModel.IsDeviceOpen, Mode=OneWay}" />
-            </StackPanel>
+            <Grid Grid.Row="0">
+                <Border Background="{ThemeResource LayerFillColorDefaultBrush}" CornerRadius="4" DoubleTapped="PreviewBorder_DoubleTapped">
+                    <Image x:Name="PreviewImage" Stretch="Uniform" />
+                </Border>
+                <InfoBar
+                    HorizontalAlignment="Stretch"
+                    VerticalAlignment="Top"
+                    IsOpen="{x:Bind IsBroken(ViewModel.Stats.ConnectionState), Mode=OneWay}"
+                    Severity="Error"
+                    IsClosable="True"
+                    Title="Streaming failed"
+                    Message="{x:Bind ViewModel.StatusText, Mode=OneWay}" />
+                <local:LoudnessMeterControl
+                    x:Name="PreviewMeter"
+                    HorizontalAlignment="Left"
+                    VerticalAlignment="Bottom"
+                    Visibility="Collapsed"
+                    ResetRequested="Meter_ResetRequested" />
+                <Border
+                    HorizontalAlignment="Right"
+                    VerticalAlignment="Bottom"
+                    Background="#B3000000"
+                    CornerRadius="6"
+                    Padding="12,8"
+                    Margin="12"
+                    MinWidth="220">
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="{x:Bind FormatConnectionState(ViewModel.Stats.ConnectionState), Mode=OneWay}" Foreground="White" FontSize="12" FontWeight="SemiBold" />
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="BITRATE" Foreground="#B3FFFFFF" FontSize="9" />
+                                <TextBlock Text="{x:Bind FormatBitrate(ViewModel.Stats.BitrateKbps), Mode=OneWay}" Foreground="White" FontSize="14" FontWeight="SemiBold" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1">
+                                <TextBlock Text="FPS" Foreground="#B3FFFFFF" FontSize="9" />
+                                <TextBlock Text="{x:Bind FormatFps(ViewModel.Stats.Fps), Mode=OneWay}" Foreground="White" FontSize="14" FontWeight="SemiBold" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Text="DROPPED" Foreground="#B3FFFFFF" FontSize="9" />
+                                <TextBlock Text="{x:Bind FormatDropped(ViewModel.Stats.DroppedFrames), Mode=OneWay}" Foreground="White" FontSize="14" FontWeight="SemiBold" />
+                            </StackPanel>
+                        </Grid>
+                    </StackPanel>
+                </Border>
+                <Button
+                    Content="&#xE740;"
+                    FontFamily="{ThemeResource SymbolThemeFontFamily}"
+                    HorizontalAlignment="Right"
+                    VerticalAlignment="Top"
+                    Margin="8"
+                    Padding="6"
+                    ToolTipService.ToolTip="Full screen preview"
+                    Click="FullscreenButton_Click" />
+            </Grid>
 
-            <Border Grid.Row="1" Background="{ThemeResource LayerFillColorDefaultBrush}" CornerRadius="4">
-                <Image x:Name="PreviewImage" Stretch="Uniform" />
-            </Border>
-
-            <Grid Grid.Row="2" Background="{ThemeResource LayerFillColorDefaultBrush}" Padding="12,8" CornerRadius="4" ColumnSpacing="20">
+            <Grid Grid.Row="1" Background="{ThemeResource LayerFillColorDefaultBrush}" Padding="12,8" CornerRadius="4" ColumnSpacing="20">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <TextBlock Grid.Column="0" Text="{x:Bind FormatConnectionState(ViewModel.Stats.ConnectionState), Mode=OneWay}" FontWeight="SemiBold" />
-                <TextBlock Grid.Column="1" Text="{x:Bind FormatBitrate(ViewModel.Stats.BitrateKbps), Mode=OneWay}" />
-                <TextBlock Grid.Column="2" Text="{x:Bind FormatFps(ViewModel.Stats.Fps), Mode=OneWay}" />
-                <TextBlock Grid.Column="3" Text="{x:Bind FormatDropped(ViewModel.Stats.DroppedFrames), Mode=OneWay}" />
-                <TextBlock Grid.Column="4" Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" Opacity="0.7" TextTrimming="CharacterEllipsis" />
-                <Button Grid.Column="5" x:Name="StreamToggleButton" Content="Start Streaming" Click="StreamToggleButton_Click" IsEnabled="{x:Bind ViewModel.IsDeviceOpen, Mode=OneWay}" />
+                <TextBlock Grid.Column="0" Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" Opacity="0.7" TextTrimming="CharacterEllipsis" />
+                <ToggleButton Grid.Column="1" x:Name="SettingsToggleButton" Click="SettingsToggleButton_Click">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon Glyph="&#xE713;" FontSize="14" />
+                        <TextBlock Text="Settings" />
+                    </StackPanel>
+                </ToggleButton>
+                <ComboBox
+                    Grid.Column="2"
+                    x:Name="PresetComboBox"
+                    Width="180"
+                    PlaceholderText="Preset..."
+                    IsEnabled="{x:Bind ViewModel.CanEditSettings, Mode=OneWay}"
+                    ItemsSource="{x:Bind ViewModel.Presets}"
+                    SelectedItem="{x:Bind ViewModel.SelectedPreset, Mode=TwoWay}"
+                    SelectionChanged="PresetComboBox_SelectionChanged">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate x:DataType="Models:Preset">
+                            <TextBlock Text="{x:Bind Name}" />
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+                <Button
+                    Grid.Column="3"
+                    x:Name="StreamToggleButton"
+                    Content="{x:Bind FormatStreamButtonContent(ViewModel.IsStreaming), Mode=OneWay}"
+                    Click="StreamToggleButton_Click"
+                    IsEnabled="{x:Bind ViewModel.IsDeviceOpen, Mode=OneWay}" />
             </Grid>
         </Grid>
 
-        <!-- Right: settings + presets -->
-        <ScrollViewer Grid.Column="1">
+        <!-- Right: settings + presets (hidden until the Settings button is toggled) -->
+        <ScrollViewer
+            x:Name="SettingsPanel"
+            Grid.Column="1"
+            Width="360"
+            Margin="16,0,0,0"
+            Visibility="Collapsed"
+            IsEnabled="{x:Bind ViewModel.CanEditSettings, Mode=OneWay}">
             <StackPanel Spacing="16">
+                <InfoBar
+                    IsOpen="{x:Bind ViewModel.IsStreaming, Mode=OneWay}"
+                    Severity="Informational"
+                    IsClosable="False"
+                    Title="Settings are locked while streaming"
+                    Message="Stop the stream to make changes." />
+
+                <StackPanel Spacing="8">
+                    <TextBlock Text="Video" Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <ComboBox
+                        x:Name="DeviceComboBox"
+                        HorizontalAlignment="Stretch"
+                        PlaceholderText="Select a video source..."
+                        ItemsSource="{x:Bind ViewModel.Devices}"
+                        SelectedItem="{x:Bind ViewModel.SelectedDevice, Mode=TwoWay}"
+                        DropDownOpened="DeviceComboBox_DropDownOpened"
+                        SelectionChanged="DeviceComboBox_SelectionChanged" />
+                </StackPanel>
+
+                <StackPanel Spacing="8">
+                    <TextBlock Text="Audio" Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <CheckBox Content="Include audio" IsChecked="{x:Bind ViewModel.AudioEnabled, Mode=TwoWay}" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <ComboBox
+                            x:Name="AudioDeviceComboBox"
+                            Width="260"
+                            PlaceholderText="Select an audio input..."
+                            IsEnabled="{x:Bind ViewModel.AudioEnabled, Mode=OneWay}"
+                            ItemsSource="{x:Bind ViewModel.AudioDevices}"
+                            SelectedItem="{x:Bind ViewModel.SelectedAudioDevice, Mode=TwoWay}" />
+                        <Button Content="Refresh" Click="RefreshAudioDevicesButton_Click" />
+                    </StackPanel>
+                    <NumberBox
+                        Header="Audio bitrate (kbps)"
+                        Value="{x:Bind ViewModel.AudioBitrateKbps, Mode=TwoWay}"
+                        IsEnabled="{x:Bind ViewModel.AudioEnabled, Mode=OneWay}"
+                        SpinButtonPlacementMode="Compact"
+                        Minimum="32"
+                        Maximum="320" />
+                </StackPanel>
 
                 <StackPanel Spacing="8">
                     <TextBlock Text="Encode" Style="{StaticResource SubtitleTextBlockStyle}" />
-                    <TextBox Header="Encoder (libx264, h264_nvenc, ...)" Text="{x:Bind ViewModel.EncoderImpl, Mode=TwoWay}" />
-                    <TextBox Header="Rate control (cbr / vbr)" Text="{x:Bind ViewModel.RateControl, Mode=TwoWay}" />
+                    <ComboBox
+                        Header="Encoder"
+                        IsEditable="True"
+                        Text="{x:Bind ViewModel.EncoderImpl, Mode=TwoWay}"
+                        HorizontalAlignment="Stretch"
+                        ToolTipService.ToolTip="'auto' prefers NVIDIA hardware encoding and falls back to software (libx264) automatically if this machine can't actually use it">
+                        <x:String>auto</x:String>
+                        <x:String>libx264</x:String>
+                        <x:String>libx265</x:String>
+                        <x:String>h264_nvenc</x:String>
+                        <x:String>hevc_nvenc</x:String>
+                        <x:String>h264_qsv</x:String>
+                        <x:String>h264_amf</x:String>
+                    </ComboBox>
+                    <ComboBox
+                        Header="Rate control"
+                        HorizontalAlignment="Stretch"
+                        SelectedItem="{x:Bind ViewModel.RateControl, Mode=TwoWay}">
+                        <x:String>cbr</x:String>
+                        <x:String>vbr</x:String>
+                    </ComboBox>
                     <NumberBox Header="Bitrate (kbps)" Value="{x:Bind ViewModel.BitrateKbps, Mode=TwoWay}" SpinButtonPlacementMode="Compact" Minimum="100" />
                     <NumberBox Header="Max bitrate (kbps)" Value="{x:Bind ViewModel.MaxBitrateKbps, Mode=TwoWay}" SpinButtonPlacementMode="Compact" Minimum="100" />
                     <NumberBox Header="Buffer size (kbps)" Value="{x:Bind ViewModel.BufferSizeKbps, Mode=TwoWay}" SpinButtonPlacementMode="Compact" Minimum="100" />
                     <NumberBox Header="Keyframe interval (sec)" Value="{x:Bind ViewModel.KeyframeIntervalSec, Mode=TwoWay}" SpinButtonPlacementMode="Compact" Minimum="1" />
-                    <TextBox Header="x264 preset (veryfast, ...)" Text="{x:Bind ViewModel.X264Preset, Mode=TwoWay}" />
+                    <ComboBox
+                        Header="x264 preset"
+                        IsEditable="True"
+                        Text="{x:Bind ViewModel.X264Preset, Mode=TwoWay}"
+                        HorizontalAlignment="Stretch">
+                        <x:String>ultrafast</x:String>
+                        <x:String>superfast</x:String>
+                        <x:String>veryfast</x:String>
+                        <x:String>faster</x:String>
+                        <x:String>fast</x:String>
+                        <x:String>medium</x:String>
+                        <x:String>slow</x:String>
+                        <x:String>slower</x:String>
+                        <x:String>veryslow</x:String>
+                        <x:String>placebo</x:String>
+                    </ComboBox>
                     <StackPanel Orientation="Horizontal" Spacing="8">
                         <NumberBox Header="Output width" Value="{x:Bind ViewModel.OutputWidth, Mode=TwoWay}" SpinButtonPlacementMode="Compact" Minimum="16" Width="150" />
                         <NumberBox Header="Output height" Value="{x:Bind ViewModel.OutputHeight, Mode=TwoWay}" SpinButtonPlacementMode="Compact" Minimum="16" Width="150" />
@@ -79,7 +223,14 @@
 
                 <StackPanel Spacing="8">
                     <TextBlock Text="SRT" Style="{StaticResource SubtitleTextBlockStyle}" />
-                    <TextBox Header="Mode (caller / listener / rendezvous)" Text="{x:Bind ViewModel.SrtMode, Mode=TwoWay}" />
+                    <ComboBox
+                        Header="Mode"
+                        HorizontalAlignment="Stretch"
+                        SelectedItem="{x:Bind ViewModel.SrtMode, Mode=TwoWay}">
+                        <x:String>caller</x:String>
+                        <x:String>listener</x:String>
+                        <x:String>rendezvous</x:String>
+                    </ComboBox>
                     <TextBox Header="Host" Text="{x:Bind ViewModel.Host, Mode=TwoWay}" />
                     <NumberBox Header="Port" Value="{x:Bind ViewModel.Port, Mode=TwoWay}" SpinButtonPlacementMode="Compact" Minimum="1" Maximum="65535" />
                     <NumberBox Header="Latency (ms)" Value="{x:Bind ViewModel.LatencyMs, Mode=TwoWay}" SpinButtonPlacementMode="Compact" Minimum="20" />
@@ -104,12 +255,87 @@
                     </ListView>
                     <TextBox x:Name="PresetNameBox" Header="Preset name" PlaceholderText="My preset" />
                     <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Button Content="Save" Click="SavePresetButton_Click" />
-                        <Button Content="Delete" Click="DeletePresetButton_Click" />
+                        <Button Content="New" Click="NewPresetButton_Click" ToolTipService.ToolTip="Clear selection to save as a new preset" />
+                        <Button Content="Save" Click="SavePresetButton_Click" ToolTipService.ToolTip="Create a new preset, or update the selected one" />
+                        <Button
+                            Content="Delete"
+                            Click="DeletePresetButton_Click"
+                            IsEnabled="{x:Bind IsNotNull(ViewModel.SelectedPreset), Mode=OneWay}" />
                     </StackPanel>
                 </StackPanel>
 
             </StackPanel>
         </ScrollViewer>
+    </Grid>
+
+    <InfoBar
+        HorizontalAlignment="Stretch"
+        VerticalAlignment="Top"
+        IsOpen="{x:Bind ViewModel.UpdateAvailable, Mode=OneWay}"
+        Severity="Informational"
+        IsClosable="True"
+        Title="Update available"
+        Message="{x:Bind ViewModel.UpdateStatusText, Mode=OneWay}">
+        <InfoBar.ActionButton>
+            <Button Content="Restart &amp; update" Click="InstallUpdateButton_Click" />
+        </InfoBar.ActionButton>
+    </InfoBar>
+
+    <Grid
+        x:Name="FullscreenOverlay"
+        Background="Black"
+        Visibility="Collapsed"
+        IsTabStop="True"
+        KeyDown="FullscreenOverlay_KeyDown"
+        DoubleTapped="FullscreenOverlay_DoubleTapped">
+        <Image x:Name="FullscreenPreviewImage" Stretch="Uniform" />
+        <local:LoudnessMeterControl
+            x:Name="FullscreenMeter"
+            HorizontalAlignment="Left"
+            VerticalAlignment="Bottom"
+            Margin="16"
+            Visibility="Collapsed"
+            ResetRequested="Meter_ResetRequested" />
+        <Border
+            HorizontalAlignment="Right"
+            VerticalAlignment="Bottom"
+            Background="#B3000000"
+            CornerRadius="6"
+            Padding="12,8"
+            Margin="16"
+            MinWidth="220">
+            <StackPanel Spacing="6">
+                <TextBlock Text="{x:Bind FormatConnectionState(ViewModel.Stats.ConnectionState), Mode=OneWay}" Foreground="White" FontSize="12" FontWeight="SemiBold" />
+                <Grid ColumnSpacing="12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0">
+                        <TextBlock Text="BITRATE" Foreground="#B3FFFFFF" FontSize="9" />
+                        <TextBlock Text="{x:Bind FormatBitrate(ViewModel.Stats.BitrateKbps), Mode=OneWay}" Foreground="White" FontSize="14" FontWeight="SemiBold" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1">
+                        <TextBlock Text="FPS" Foreground="#B3FFFFFF" FontSize="9" />
+                        <TextBlock Text="{x:Bind FormatFps(ViewModel.Stats.Fps), Mode=OneWay}" Foreground="White" FontSize="14" FontWeight="SemiBold" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="2">
+                        <TextBlock Text="DROPPED" Foreground="#B3FFFFFF" FontSize="9" />
+                        <TextBlock Text="{x:Bind FormatDropped(ViewModel.Stats.DroppedFrames), Mode=OneWay}" Foreground="White" FontSize="14" FontWeight="SemiBold" />
+                    </StackPanel>
+                </Grid>
+            </StackPanel>
+        </Border>
+        <Button
+            Content="&#xE73F;"
+            FontFamily="{ThemeResource SymbolThemeFontFamily}"
+            HorizontalAlignment="Right"
+            VerticalAlignment="Top"
+            Margin="16"
+            Padding="8"
+            ToolTipService.ToolTip="Exit full screen (Esc)"
+            Click="ExitFullscreenButton_Click" />
+    </Grid>
     </Grid>
 </Page>

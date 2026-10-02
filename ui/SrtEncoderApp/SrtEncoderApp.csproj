@@ -15,6 +15,26 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- Velopack (see Program.cs) must run before any WinAppSDK/XAML init, which means
+         owning Main ourselves instead of the WinUI templates' generated one. -->
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
+  </PropertyGroup>
+
+  <!--
+    Velopack's unpackaged distribution needs the Windows App SDK runtime bundled into the
+    publish output rather than relying on a separately-installed framework package (which
+    is how the MSIX/dotnet-run debug path above gets it). Scoped to self-contained publishes
+    only (see win-*.pubxml) so it doesn't change the packaged debug-identity path used by
+    `dotnet run`.
+    NOTE: an unpackaged run on this project's own dev machine previously crashed
+    (REGDB_E_CLASSNOTREG / 0xc000027b) even with this flag set — root cause not fully
+    confirmed (suspect the Windows App SDK/VCLibs runtime still needs a one-time install on
+    a machine that's never had it). Verify a real unpackaged launch on a clean VM before
+    shipping a Velopack release; if it recurs, the fix is almost certainly bundling/running
+    Microsoft's WindowsAppRuntimeInstall redistributable during first run, not this flag.
+  -->
+  <PropertyGroup Condition="'$(SelfContained)'=='true'">
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
   </PropertyGroup>
 
   <ItemGroup>
@@ -57,6 +77,9 @@
     <!-- DPAPI (ProtectedData) for encrypting SRT passphrases at rest in presets; not
          part of the base BCL on .NET Core/5+, even on Windows-specific TFMs. -->
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+    <!-- In-app update checking/applying for the unpackaged (non-MSIX) distribution — see
+         Program.cs (VelopackApp.Build().Run()) and Services/UpdateService.cs. -->
+    <PackageReference Include="Velopack" Version="*" />
   </ItemGroup>
 
   <!--
@@ -109,13 +132,20 @@
   </Target>
 
   <!--
-    ffmpeg.exe (fetched by tools/ffmpeg/fetch-ffmpeg.ps1, not committed to git — see
-    .gitignore) is bundled as Content when present, so `dotnet publish` carries it along.
-    Streaming will fail with a clear error from FfmpegProcessController if it's missing;
-    the Condition just keeps the build itself from failing when it hasn't been fetched yet.
+    ffmpeg.exe and ffmpeg-legacy-nvenc.exe (fetched by tools/ffmpeg/fetch-ffmpeg.ps1, not
+    committed to git — see .gitignore) are bundled as Content when present, so
+    `dotnet publish` carries them along. The legacy build exists only as an NVENC
+    fallback for GPUs too old for the primary build's NVENC driver requirement — see
+    MainViewModel.ResolveEncoder and fetch-ffmpeg.ps1 for why there are two.
+    Streaming will fail with a clear error from FfmpegProcessController if the primary
+    one is missing; the Condition just keeps the build itself from failing when neither
+    has been fetched yet.
   -->
   <ItemGroup>
     <Content Include="ffmpeg\ffmpeg.exe" Condition="Exists('ffmpeg\ffmpeg.exe')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="ffmpeg\ffmpeg-legacy-nvenc.exe" Condition="Exists('ffmpeg\ffmpeg-legacy-nvenc.exe')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>

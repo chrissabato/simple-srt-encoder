@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using SrtEncoderApp.Models;
 using SrtEncoderApp.Services;
+using Velopack;
 
 namespace SrtEncoderApp.ViewModels;
 
@@ -15,10 +16,114 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 {
     private readonly CaptureCoreService _captureCore = new();
     private readonly PresetService _presets = new();
+    private readonly UpdateService _updates = new();
 
     public bool IsNativeCoreAvailable => _captureCore.IsAvailable;
 
+    // "auto" is the portable choice stored in EncoderImpl/presets: it always prefers
+    // NVIDIA hardware encoding but falls back automatically on a machine where NVENC
+    // isn't usable, so the same preset behaves correctly everywhere instead of
+    // hardcoding one machine's capabilities. Resolved to a concrete (encoder, ffmpeg
+    // build) pair in ResolveEncoder(), right before actually starting a stream — never
+    // persisted as the resolved value.
+    public const string AutoEncoder = "auto";
+
+    // ffmpeg ships as two builds (see tools/ffmpeg/fetch-ffmpeg.ps1): the primary build
+    // ("" here — FfmpegProcessController defaults an empty name to ffmpeg.exe) tracks
+    // ffmpeg master for the newest codecs/fixes, but ffmpeg 9.0 raised NVENC's minimum
+    // driver to 610.00+ and broke h264_nvenc on every Pascal-generation NVIDIA GPU
+    // (confirmed on a Quadro P2000, driver 582.78 — NVIDIA's R580 branch is the last one
+    // that supports Pascal at all, so that's not fixable by updating the driver). The
+    // legacy build is pinned to ffmpeg 8.1.x, which only needs NVENC API 13.0 (driver
+    // >=570) and works on that same hardware. Auto-resolution below tries NVENC on the
+    // primary build first (so newer GPUs still get the newest build) and only reaches
+    // for the legacy build as a second attempt, specifically for NVENC — every other
+    // encoder always uses the primary build.
+    public const string LegacyNvencFfmpeg = "ffmpeg-legacy-nvenc.exe";
+
+    private static readonly (string Encoder, string FfmpegExeName)[] AutoEncoderPreference =
+    {
+        ("h264_nvenc", ""),
+        ("h264_nvenc", LegacyNvencFfmpeg),
+        ("h264_qsv", ""),
+        ("h264_amf", ""),
+        ("libx264", ""),
+    };
+
+    // Which ffmpeg builds are worth trying for a given hardware encoder when it's named
+    // *explicitly* (not "auto") — e.g. a preset saved before "auto" existed, like one
+    // that stores a literal "h264_nvenc" from testing on this exact machine. Without
+    // this, an explicit hardware-encoder choice would skip the fallback logic entirely
+    // and fail exactly the way "auto" used to before the legacy build existed — real bug
+    // hit via a saved preset ("Teela") with EncoderImpl="h264_nvenc" baked in from before
+    // this feature shipped.
+    private static readonly Dictionary<string, string[]> ExplicitHardwareEncoderBinaries = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["h264_nvenc"] = new[] { "", LegacyNvencFfmpeg },
+        ["hevc_nvenc"] = new[] { "", LegacyNvencFfmpeg },
+        ["h264_qsv"] = new[] { "" },
+        ["h264_amf"] = new[] { "" },
+    };
+
+    private readonly Dictionary<(string Encoder, string FfmpegExeName), bool> _encoderProbeCache = new();
+
+    // Actually runs a stream's encoder through ffmpeg once (ProbeEncoder launches a real
+    // process, up to ~5s worst case) and remembers the result for the rest of this
+    // session — hardware availability can't change mid-session, so re-probing on every
+    // "auto" resolution would just waste time for no benefit.
+    private bool ProbeEncoderCached(string encoder, string ffmpegExeName)
+    {
+        var key = (encoder, ffmpegExeName);
+        if (!_encoderProbeCache.TryGetValue(key, out var available))
+        {
+            available = _captureCore.ProbeEncoder(encoder, ffmpegExeName);
+            _encoderProbeCache[key] = available;
+        }
+        return available;
+    }
+
+    // libx264 (software) is ffmpeg's universal fallback and always assumed available on
+    // the primary build — it ships with every ffmpeg build this app uses, so probing it
+    // would only add latency for a result that's never actually in question.
+    //
+    // Ok is false only for an explicitly-named hardware encoder that failed on every
+    // bundled ffmpeg build for it — the caller should refuse to start rather than launch
+    // ffmpeg knowing it will fail. "auto" always succeeds (falls through to libx264).
+    private (string Encoder, string FfmpegExeName, bool Ok) ResolveEncoder(string requested)
+    {
+        if (string.Equals(requested, AutoEncoder, StringComparison.OrdinalIgnoreCase))
+        {
+            foreach (var (candidate, exeName) in AutoEncoderPreference)
+            {
+                if (string.Equals(candidate, "libx264", StringComparison.OrdinalIgnoreCase) || ProbeEncoderCached(candidate, exeName))
+                {
+                    return (candidate, exeName, true);
+                }
+            }
+            return ("libx264", "", true);
+        }
+
+        // Explicit choice — never silently substitute a *different* encoder the user
+        // didn't ask for, but a known hardware encoder still gets tried across every
+        // bundled ffmpeg build that might support it (see ExplicitHardwareEncoderBinaries)
+        // instead of blindly trusting a name that may be stale or wrong for this machine.
+        if (ExplicitHardwareEncoderBinaries.TryGetValue(requested, out var binaries))
+        {
+            foreach (var exeName in binaries)
+            {
+                if (ProbeEncoderCached(requested, exeName))
+                {
+                    return (requested, exeName, true);
+                }
+            }
+            return (requested, "", false);
+        }
+
+        return (requested, "", true); // software/unrecognized encoder — trust as given, no probe
+    }
+
     public ObservableCollection<CaptureDeviceInfo> Devices { get; } = new();
+    public ObservableCollection<CaptureDeviceInfo> AudioDevices { get; } = new();
     public ObservableCollection<Preset> Presets { get; } = new();
 
     public MainViewModel()
@@ -44,7 +149,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     }
 
     // --- Encode settings (bound via NumberBox/ComboBox/TextBox) ---
-    private string _encoderImpl = "libx264";
+    private string _encoderImpl = AutoEncoder;
     public string EncoderImpl { get => _encoderImpl; set => SetProperty(ref _encoderImpl, value); }
 
     private string _rateControl = "cbr";
@@ -74,6 +179,58 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private double _outputFrameRate = 30;
     public double OutputFrameRate { get => _outputFrameRate; set => SetProperty(ref _outputFrameRate, value); }
 
+    private bool _audioEnabled;
+    public bool AudioEnabled
+    {
+        get => _audioEnabled;
+        set
+        {
+            if (SetProperty(ref _audioEnabled, value))
+            {
+                UpdateAudioMonitor();
+            }
+        }
+    }
+
+    private CaptureDeviceInfo? _selectedAudioDevice;
+    public CaptureDeviceInfo? SelectedAudioDevice
+    {
+        get => _selectedAudioDevice;
+        set
+        {
+            if (SetProperty(ref _selectedAudioDevice, value))
+            {
+                UpdateAudioMonitor();
+            }
+        }
+    }
+
+    private LoudnessReading _loudness = LoudnessReading.Silent;
+    public LoudnessReading Loudness { get => _loudness; private set => SetProperty(ref _loudness, value); }
+
+    public void RefreshLoudness() => Loudness = _captureCore.GetLoudness();
+
+    public void ResetLoudness() => _captureCore.ResetLoudness();
+
+    // The meter runs whenever audio is enabled and a device is chosen, not only while
+    // streaming, so levels can be checked before going live.
+    private void UpdateAudioMonitor()
+    {
+        _captureCore.StopAudioMonitor();
+        Loudness = LoudnessReading.Silent;
+        if (!AudioEnabled || SelectedAudioDevice is null)
+        {
+            return;
+        }
+        if (!_captureCore.StartAudioMonitor(SelectedAudioDevice.DeviceId))
+        {
+            StatusText = $"Could not open audio device {SelectedAudioDevice.DisplayName} for metering.";
+        }
+    }
+
+    private double _audioBitrateKbps = 128;
+    public double AudioBitrateKbps { get => _audioBitrateKbps; set => SetProperty(ref _audioBitrateKbps, value); }
+
     // --- SRT settings ---
     private string _srtMode = "caller";
     public string SrtMode { get => _srtMode; set => SetProperty(ref _srtMode, value); }
@@ -100,8 +257,55 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private bool _isDeviceOpen;
     public bool IsDeviceOpen { get => _isDeviceOpen; private set => SetProperty(ref _isDeviceOpen, value); }
 
+    // --- Update checking (Velopack; no-op entirely when not running from a
+    // Velopack-installed copy — see UpdateService.IsAvailable) ---
+    private UpdateInfo? _pendingUpdate;
+
+    private bool _updateAvailable;
+    public bool UpdateAvailable { get => _updateAvailable; private set => SetProperty(ref _updateAvailable, value); }
+
+    private string _updateStatusText = "";
+    public string UpdateStatusText { get => _updateStatusText; private set => SetProperty(ref _updateStatusText, value); }
+
+    public async Task CheckForUpdatesAsync()
+    {
+        var update = await _updates.CheckForUpdatesAsync();
+        if (update is null)
+        {
+            return;
+        }
+        _pendingUpdate = update;
+        UpdateStatusText = $"Version {update.TargetFullRelease.Version} is available.";
+        UpdateAvailable = true;
+    }
+
+    public async Task InstallUpdateAndRestartAsync()
+    {
+        if (_pendingUpdate is null)
+        {
+            return;
+        }
+        UpdateStatusText = "Downloading update…";
+        await _updates.DownloadAndApplyAsync(_pendingUpdate);
+    }
+
     private bool _isStreaming;
-    public bool IsStreaming { get => _isStreaming; private set => SetProperty(ref _isStreaming, value); }
+    public bool IsStreaming
+    {
+        get => _isStreaming;
+        private set
+        {
+            if (SetProperty(ref _isStreaming, value))
+            {
+                OnPropertyChanged(nameof(CanEditSettings));
+            }
+        }
+    }
+
+    // Encode/audio/SRT settings and presets must not change once ffmpeg is already
+    // running with a snapshot of them (StartStream() copies settings in at call time;
+    // editing afterward would silently desync the UI from what's actually streaming).
+    public bool CanEditSettings => !IsStreaming;
 
     private StreamStats _stats = Models.StreamStats.Idle;
     public StreamStats Stats { get => _stats; private set => SetProperty(ref _stats, value); }
@@ -111,11 +315,24 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public void RefreshDevices()
     {
+        var selectedId = SelectedDevice?.DeviceId;
         Devices.Clear();
         foreach (var device in _captureCore.EnumerateDevices())
         {
             Devices.Add(device);
         }
+        SelectedDevice = Devices.FirstOrDefault(d => d.DeviceId == selectedId);
+    }
+
+    public void RefreshAudioDevices()
+    {
+        var selectedId = SelectedAudioDevice?.DeviceId;
+        AudioDevices.Clear();
+        foreach (var device in _captureCore.EnumerateAudioDevices())
+        {
+            AudioDevices.Add(device);
+        }
+        SelectedAudioDevice = AudioDevices.FirstOrDefault(d => d.DeviceId == selectedId);
     }
 
     public void RefreshPresets()
@@ -129,6 +346,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         SelectedPreset = Presets.FirstOrDefault(p => p.Id == selectedId);
     }
 
+    private string? _openDeviceId;
+
     public bool OpenSelectedDevice()
     {
         if (SelectedDevice is null)
@@ -137,9 +356,19 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             return false;
         }
 
+        // Selecting a device now auto-opens it (see DeviceComboBox_SelectionChanged),
+        // which also re-fires when RefreshDevices() swaps in an equal-but-different
+        // CaptureDeviceInfo instance for the dropdown's auto-refresh-on-open — skip
+        // the close/reopen when it's already the open device.
+        if (IsDeviceOpen && _openDeviceId == SelectedDevice.DeviceId)
+        {
+            return true;
+        }
+
         _captureCore.CloseSource();
         var opened = _captureCore.OpenSource(SelectedDevice, (int)OutputWidth, (int)OutputHeight, 30, 1);
         IsDeviceOpen = opened;
+        _openDeviceId = opened ? SelectedDevice.DeviceId : null;
         StatusText = opened
             ? $"Opened {SelectedDevice.DisplayName} at {_captureCore.OpenWidth}x{_captureCore.OpenHeight}."
             : $"Failed to open {SelectedDevice.DisplayName}.";
@@ -150,6 +379,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         _captureCore.CloseSource();
         IsDeviceOpen = false;
+        _openDeviceId = null;
         StatusText = "No device open.";
     }
 
@@ -163,9 +393,52 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             return false;
         }
 
-        var started = _captureCore.StartStream(BuildPresetEncode(), BuildPresetSrt(), plaintextPassphrase);
+        if (AudioEnabled && SelectedAudioDevice is null)
+        {
+            StatusText = "Select an audio device, or turn audio off, before streaming.";
+            Stats = Stats with { ConnectionState = ConnectionState.Broken };
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(Host))
+        {
+            // Real bug hit: an empty Host produced "srt://:9000?..." — ffmpeg then
+            // failed with a generic SRT I/O error with no indication the URL itself was
+            // malformed. Catch the actually-common cause (no preset applied, or Host
+            // cleared) before ever launching ffmpeg.
+            StatusText = "Enter an SRT host before streaming (or select a preset that has one).";
+            Stats = Stats with { ConnectionState = ConnectionState.Broken };
+            return false;
+        }
+
+        // BuildPresetEncode() carries the portable preference (e.g. "auto") — resolved to
+        // a concrete, verified-working (encoder, ffmpeg build) pair only here, for the
+        // native call, never for what gets persisted (see SaveAsPreset, which builds its
+        // own unresolved copy).
+        var encode = BuildPresetEncode();
+        var requestedAuto = string.Equals(encode.EncoderImpl, AutoEncoder, StringComparison.OrdinalIgnoreCase);
+        var (resolvedEncoder, ffmpegExeName, ok) = ResolveEncoder(encode.EncoderImpl);
+        if (!ok)
+        {
+            // A named hardware encoder that failed on every bundled ffmpeg build for it —
+            // refuse to start rather than launch ffmpeg knowing it will fail silently a
+            // few seconds later with no indication why (see the ffmpeg: log lines this
+            // exact scenario used to produce with no on-screen notification at all).
+            StatusText = $"'{resolvedEncoder}' isn't usable on this machine on any bundled ffmpeg build — switch the encoder to \"auto\" or \"libx264\".";
+            Stats = Stats with { ConnectionState = ConnectionState.Broken };
+            return false;
+        }
+        encode.EncoderImpl = resolvedEncoder;
+
+        var started = _captureCore.StartStream(encode, BuildPresetSrt(), plaintextPassphrase, ffmpegExeName);
         IsStreaming = started;
-        StatusText = started ? "Streaming started." : "Failed to start streaming (check ffmpeg.exe is present — see tools/ffmpeg).";
+        StatusText = started
+            ? requestedAuto || !string.IsNullOrEmpty(ffmpegExeName)
+                ? string.IsNullOrEmpty(ffmpegExeName)
+                    ? $"Streaming started (auto-selected encoder: {resolvedEncoder})."
+                    : $"Streaming started (encoder: {resolvedEncoder}, via legacy ffmpeg build for older-GPU NVENC compatibility)."
+                : "Streaming started."
+            : "Failed to start streaming (check ffmpeg.exe is present — see tools/ffmpeg).";
         return started;
     }
 
@@ -179,12 +452,18 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public void RefreshStats()
     {
+        Stats = _captureCore.GetStats();
         if (!_captureCore.IsStreaming && IsStreaming)
         {
-            // ffmpeg exited on its own (crash, connection refused, ...).
+            // ffmpeg exited on its own (crash, SRT connect refused/timeout, ...) — this
+            // is the only place that notices, since nothing else polls native state.
+            // Previously this silently flipped IsStreaming without saying why, leaving
+            // "Streaming started." shown indefinitely even though nothing was streaming.
             IsStreaming = false;
+            StatusText = Stats.ConnectionState == ConnectionState.Broken
+                ? "Streaming stopped: ffmpeg exited unexpectedly (SRT connection failed/refused/timed out, or a bad setting). See CaptureCore.log (%TEMP%) for ffmpeg's actual error."
+                : "Streaming stopped unexpectedly.";
         }
-        Stats = _captureCore.GetStats();
     }
 
     // Note: the SRT passphrase is intentionally not restored into any bindable field —
@@ -208,6 +487,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         OutputHeight = preset.Encode.OutputHeight;
         OutputFrameRate = preset.Encode.OutputFrameRateNumerator / (double)Math.Max(1, preset.Encode.OutputFrameRateDenominator);
 
+        AudioEnabled = preset.Encode.AudioEnabled;
+        AudioBitrateKbps = preset.Encode.AudioBitrateKbps;
+        // Match by DeviceId if currently enumerated, otherwise leave unset (device may
+        // be unplugged) — same convention as the video SelectedDevice match above.
+        SelectedAudioDevice = AudioDevices.FirstOrDefault(d => d.DeviceId == preset.Encode.AudioDeviceId);
+
         SrtMode = preset.Srt.Mode;
         Host = preset.Srt.Host;
         Port = preset.Srt.Port;
@@ -216,8 +501,21 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         StreamId = preset.Srt.StreamId;
     }
 
-    public Preset SaveAsPreset(string name, string? existingId, string? plaintextPassphrase)
+    // Clears the current selection so the Presets section starts a fresh, unnamed
+    // preset rather than overwriting whatever was selected — there's otherwise no way
+    // to get back to a "new preset" state once one is selected (ListView/ComboBox
+    // selection can't be cleared by clicking).
+    public void NewPreset() => SelectedPreset = null;
+
+    public bool SaveAsPreset(string name, string? existingId, string? plaintextPassphrase)
     {
+        name = name.Trim();
+        if (Presets.Any(p => p.Id != existingId && string.Equals(p.Name, name, StringComparison.CurrentCultureIgnoreCase)))
+        {
+            StatusText = $"A preset named \"{name}\" already exists — choose a different name.";
+            return false;
+        }
+
         var preset = existingId is not null
             ? Presets.FirstOrDefault(p => p.Id == existingId) ?? new Preset { Id = existingId }
             : new Preset();
@@ -240,19 +538,24 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
 
         _presets.Save(preset);
+        var wasUpdate = existingId is not null;
         RefreshPresets();
         SelectedPreset = Presets.FirstOrDefault(p => p.Id == preset.Id);
-        return preset;
+        StatusText = wasUpdate ? $"Updated preset \"{name}\"." : $"Saved new preset \"{name}\".";
+        return true;
     }
 
     public void DeleteSelectedPreset()
     {
         if (SelectedPreset is null)
         {
+            StatusText = "Select a preset to delete first.";
             return;
         }
+        var name = SelectedPreset.Name;
         _presets.Delete(SelectedPreset);
         RefreshPresets();
+        StatusText = $"Deleted preset \"{name}\".";
     }
 
     private PresetEncode BuildPresetEncode() => new()
@@ -268,6 +571,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         OutputHeight = (int)OutputHeight,
         OutputFrameRateNumerator = (int)OutputFrameRate,
         OutputFrameRateDenominator = 1,
+        AudioEnabled = AudioEnabled,
+        AudioDeviceId = SelectedAudioDevice?.DeviceId ?? "",
+        AudioDeviceName = SelectedAudioDevice?.DisplayName ?? "",
+        AudioBitrateKbps = (int)AudioBitrateKbps,
     };
 
     private PresetSrt BuildPresetSrt() => new()
