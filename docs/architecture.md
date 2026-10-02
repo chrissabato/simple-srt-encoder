@@ -40,14 +40,18 @@ See the project plan for full context. Summary of the load-bearing decisions:
   `MainPage.xaml`). `release.ps1` publishes, `vpk pack`s (signed by default), and (given
   `-RepoUrl`) `vpk upload github`s a release to
   https://github.com/chrissabato/srt-encoder.
-  **Known risk, not yet resolved**: an earlier *unpackaged* launch on this project's own
-  dev machine crashed (`REGDB_E_CLASSNOTREG`/`0xc000027b`) even with
-  `WindowsAppSDKSelfContained=true` set — only the MSIX/packaged launch path was confirmed
-  working at the time. Velopack's whole model depends on unpackaged launches working.
-  Verify a real install+launch on a clean VM (no dev tools, no prior WinAppSDK install)
-  before shipping a release; if the crash recurs, the likely fix is bundling/running
-  Microsoft's `WindowsAppRuntimeInstall` redistributable on first run rather than relying
-  on self-contained deployment alone.
+  **Resolved (2026-10-02)**: the `REGDB_E_CLASSNOTREG`/`0xc000027b` unpackaged-launch
+  crash noted above as an unverified risk turned out to be real — reproduced via an actual
+  Velopack install reporting "partially succeeded", root-caused via Windows Event Viewer.
+  `WindowsAppSDKSelfContained=true`'s `Condition="'$(SelfContained)'=='true'"` never
+  actually matched (that property only arrives via the `.pubxml`, invisible to MSBuild
+  when it evaluates the main project file's own conditions), so every publish was
+  silently framework-dependent, needing a system-installed Windows App Runtime this
+  machine never had. Fixed by setting it unconditionally and also passing
+  `-p:SelfContained=true -p:WindowsAppSDKSelfContained=true` explicitly in `release.ps1`'s
+  `dotnet publish` call. Verified for real: a from-scratch install launched clean, with
+  `Microsoft.WindowsAppRuntime.dll`/`DWriteCore.dll` now actually present in the publish
+  output, and zero Event Viewer errors on install or launch.
 
 ## Build
 

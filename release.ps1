@@ -123,7 +123,7 @@ else {
 }
 
 Write-Host "==> Publishing win-x64 (self-contained)" -ForegroundColor Cyan
-dotnet publish $csproj -c Release -p:Platform=x64 -p:PublishProfile=win-x64 -p:Version=$Version
+dotnet publish $csproj -c Release -p:Platform=x64 -p:PublishProfile=win-x64 -p:Version=$Version -p:SelfContained=true -p:WindowsAppSDKSelfContained=true
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 if (-not (Test-Path "$publishDir/SrtEncoderApp.exe")) {

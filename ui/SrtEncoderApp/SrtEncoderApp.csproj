@@ -23,17 +23,20 @@
   <!--
     Velopack's unpackaged distribution needs the Windows App SDK runtime bundled into the
     publish output rather than relying on a separately-installed framework package (which
-    is how the MSIX/dotnet-run debug path above gets it). Scoped to self-contained publishes
-    only (see win-*.pubxml) so it doesn't change the packaged debug-identity path used by
-    `dotnet run`.
-    NOTE: an unpackaged run on this project's own dev machine previously crashed
-    (REGDB_E_CLASSNOTREG / 0xc000027b) even with this flag set — root cause not fully
-    confirmed (suspect the Windows App SDK/VCLibs runtime still needs a one-time install on
-    a machine that's never had it). Verify a real unpackaged launch on a clean VM before
-    shipping a Velopack release; if it recurs, the fix is almost certainly bundling/running
-    Microsoft's WindowsAppRuntimeInstall redistributable during first run, not this flag.
+    is how the MSIX/dotnet-run debug path above gets it).
+
+    REAL BUG, CONFIRMED (2026-10-02): this used to be
+    `<PropertyGroup Condition="'$(SelfContained)'=='true'">`, intending to scope it to
+    self-contained publishes only (SelfContained=true in win-*.pubxml) — but $(SelfContained)
+    is only ever set BY that pubxml, which isn't visible yet when MSBuild evaluates this
+    condition against the main project file. The condition silently never matched, so every
+    `dotnet publish` (including release.ps1's) produced a framework-dependent build, and the
+    installed app crashed on every launch with COMException 0x80040154 (REGDB_E_CLASSNOTREG)
+    — confirmed via Windows Event Viewer after a real Velopack install reported "partially
+    succeeded". Set unconditionally instead; it's a no-op for the packaged MSIX/dotnet-run
+    debug path (that gets the runtime from its MSIX framework package dependency regardless).
   -->
-  <PropertyGroup Condition="'$(SelfContained)'=='true'">
+  <PropertyGroup>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
   </PropertyGroup>
 
