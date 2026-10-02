@@ -21,6 +21,29 @@ See the project plan for full context. Summary of the load-bearing decisions:
   persistence/schema logic in C# (`ui/SrtEncoderApp/Services/PresetService.cs`, Phase 1);
   the native ABI only ever sees plain setting structs, so preset schema can evolve
   independently.
+- **Distribution/updates**: Velopack, not MSIX — this app may ship externally (not just
+  internally), and needs full-trust native device/process access (UVC, DeckLink, spawning
+  ffmpeg.exe) without MSIX's cert-trust-before-install friction when not signed by a CA.
+  Releases are hosted on GitHub Releases (repo is OK to be public, so the client needs no
+  access token — see `GithubSource` in `Services/UpdateService.cs`); signing is expected
+  to reuse the Azure Trusted Signing pipeline already used for a separate Electron app
+  (`vpk pack --azureTrustedSignFile`, wired as `release.ps1 -AzureTrustedSignFile`).
+  `Program.cs` (custom `Main`, since `VelopackApp.Build().Run()` must run before any
+  WinAppSDK/XAML init) + `Services/UpdateService.cs` (update check/apply, no-op when not
+  running from a Velopack-installed copy) + `MainViewModel.CheckForUpdatesAsync`/
+  `InstallUpdateAndRestartAsync` (checked once at startup, surfaced via an InfoBar in
+  `MainPage.xaml`). `release.ps1` publishes, `vpk pack`s, and (given `-RepoUrl`)
+  `vpk upload github`s a release — see its header for the remaining TODOs: set
+  `UpdateService.GithubRepoUrl` once the repo exists on GitHub, and decide signing
+  (unsigned is fine for local testing, not for anything end users download).
+  **Known risk, not yet resolved**: an earlier *unpackaged* launch on this project's own
+  dev machine crashed (`REGDB_E_CLASSNOTREG`/`0xc000027b`) even with
+  `WindowsAppSDKSelfContained=true` set — only the MSIX/packaged launch path was confirmed
+  working at the time. Velopack's whole model depends on unpackaged launches working.
+  Verify a real install+launch on a clean VM (no dev tools, no prior WinAppSDK install)
+  before shipping a release; if the crash recurs, the likely fix is bundling/running
+  Microsoft's `WindowsAppRuntimeInstall` redistributable on first run rather than relying
+  on self-contained deployment alone.
 
 ## Build
 
@@ -45,3 +68,10 @@ string).
 2. DeckLink backend (once the SDK is obtained).
 3. NDI backend (once the SDK is obtained).
 4. Hardware encoders, audio, reconnect/backoff, preset import/export.
+   - Audio: WASAPI mic/line-in capture (device picker, independent of the video
+     backend/device) is implemented — see `native/CaptureCore/src/audio/WasapiAudioCapture.*`
+     and `FfmpegProcessController`'s second rawaudio input. DeckLink's embedded SDI/HDMI
+     audio is also wired up: pick "Embedded audio (capture source)" in the audio device
+     list (sentinel ID `embedded`, `CC_EMBEDDED_AUDIO_DEVICE_ID`); `DeckLinkCaptureSource`
+     buffers 48kHz/2ch/s16 PCM and `CaptureManager::EmbeddedAudioThreadMain` pumps it to
+     ffmpeg. NDI embedded audio is still not wired up.

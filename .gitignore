@@ -5,9 +5,13 @@ native/CMakeUserPresets.json
 # Proprietary SDKs dropped locally (DeckLink/NDI) — never redistributable, never committed
 native/vendor/*
 !native/vendor/README.md
+*.zip
 
 # FFmpeg binary, fetched by tools/ffmpeg/fetch-ffmpeg.ps1 — licensed, not committed
 ui/SrtEncoderApp/ffmpeg/
+
+# Velopack release output (release.ps1) — built artifacts, not source
+/releases/
 
 # Visual Studio / editor
 .vs/
