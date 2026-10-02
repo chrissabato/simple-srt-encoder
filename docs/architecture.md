@@ -25,17 +25,21 @@ See the project plan for full context. Summary of the load-bearing decisions:
   internally), and needs full-trust native device/process access (UVC, DeckLink, spawning
   ffmpeg.exe) without MSIX's cert-trust-before-install friction when not signed by a CA.
   Releases are hosted on GitHub Releases (repo is OK to be public, so the client needs no
-  access token — see `GithubSource` in `Services/UpdateService.cs`); signing is expected
-  to reuse the Azure Trusted Signing pipeline already used for a separate Electron app
-  (`vpk pack --azureTrustedSignFile`, wired as `release.ps1 -AzureTrustedSignFile`).
+  access token — see `GithubSource` in `Services/UpdateService.cs`). Signing reuses the
+  same Azure Trusted Signing account + certificate profile as the Stadium Sound Electron
+  app (one certificate profile signs for a publisher identity, not a single product) —
+  `azure-trusted-signing-metadata.json` at the repo root (not secret: account/profile
+  names, no credentials) is `vpk pack --azureTrustedSignFile`'s default input via
+  `release.ps1`; actual auth still needs AZURE_TENANT_ID/AZURE_CLIENT_ID/
+  AZURE_CLIENT_SECRET in the environment, same service-principal secrets Stadium Sound's
+  `release.yml` already uses, picked up automatically by vpk's bundled Azure.Identity.
   `Program.cs` (custom `Main`, since `VelopackApp.Build().Run()` must run before any
   WinAppSDK/XAML init) + `Services/UpdateService.cs` (update check/apply, no-op when not
   running from a Velopack-installed copy) + `MainViewModel.CheckForUpdatesAsync`/
   `InstallUpdateAndRestartAsync` (checked once at startup, surfaced via an InfoBar in
-  `MainPage.xaml`). `release.ps1` publishes, `vpk pack`s, and (given `-RepoUrl`)
-  `vpk upload github`s a release to https://github.com/chrissabato/srt-encoder — the
-  remaining TODO is signing (unsigned is fine for local testing, not for anything end
-  users download; see `release.ps1 -AzureTrustedSignFile`).
+  `MainPage.xaml`). `release.ps1` publishes, `vpk pack`s (signed by default), and (given
+  `-RepoUrl`) `vpk upload github`s a release to
+  https://github.com/chrissabato/srt-encoder.
   **Known risk, not yet resolved**: an earlier *unpackaged* launch on this project's own
   dev machine crashed (`REGDB_E_CLASSNOTREG`/`0xc000027b`) even with
   `WindowsAppSDKSelfContained=true` set — only the MSIX/packaged launch path was confirmed

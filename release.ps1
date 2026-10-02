@@ -22,9 +22,19 @@
 
 .PARAMETER AzureTrustedSignFile
     Path to the Azure Trusted Signing metadata.json (vpk's native
-    --azureTrustedSignFile), matching the Azure signing pipeline already used for the
-    Electron app. Omit to produce an unsigned build — fine for local testing, but
-    unsigned output will trigger SmartScreen for end users.
+    --azureTrustedSignFile). Default: azure-trusted-signing-metadata.json at the repo
+    root, which reuses the same Azure Trusted Signing account + certificate profile as
+    the Stadium Sound Electron app (see its electron-builder.yml's azureSignOptions) —
+    one certificate profile can sign any number of different apps for the same
+    publisher identity, so this isn't per-app config. Pass an empty string to produce
+    an unsigned build instead (fine for local testing; unsigned output will trigger
+    SmartScreen for end users).
+
+    Either way, signing itself still needs AZURE_TENANT_ID/AZURE_CLIENT_ID/
+    AZURE_CLIENT_SECRET in the environment (the same service-principal secrets
+    Stadium Sound's release.yml passes to electron-builder) — vpk bundles Azure.Identity
+    and picks them up automatically via DefaultAzureCredential; nothing to configure
+    beyond having them set.
 
 .PARAMETER SignTemplate
     Alternative to -AzureTrustedSignFile: an arbitrary signing command passed to vpk's
@@ -54,7 +64,7 @@ param(
 
     [string]$OutputDir = 'releases',
 
-    [string]$AzureTrustedSignFile,
+    [string]$AzureTrustedSignFile = "$PSScriptRoot/azure-trusted-signing-metadata.json",
 
     [string]$SignTemplate,
 
@@ -108,7 +118,12 @@ $packArgs = @(
     '--mainExe', 'SrtEncoderApp.exe'
     '--outputDir', $OutputDir
 )
-if ($AzureTrustedSignFile) {
+if ($AzureTrustedSignFile -and (Test-Path $AzureTrustedSignFile)) {
+    foreach ($var in @('AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET')) {
+        if (-not (Get-Item "env:$var" -ErrorAction SilentlyContinue)) {
+            throw "$AzureTrustedSignFile is set, but `$env:$var isn't — signing will fail with an Azure.Identity auth error otherwise. Set all three (AZURE_TENANT_ID/AZURE_CLIENT_ID/AZURE_CLIENT_SECRET), same as Stadium Sound's release.yml."
+        }
+    }
     $packArgs += @('--azureTrustedSignFile', $AzureTrustedSignFile)
 }
 elseif ($SignTemplate) {
