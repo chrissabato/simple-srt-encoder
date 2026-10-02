@@ -83,6 +83,21 @@ $appId = 'SrtEncoderApp'
 $csproj = "$repoRoot/ui/SrtEncoderApp/SrtEncoderApp.csproj"
 $publishDir = "$repoRoot/ui/SrtEncoderApp/bin/x64/Release/net10.0-windows10.0.26100.0/win-x64/publish"
 
+# Load .env (gitignored — see .env.example) if present, without overwriting anything
+# already set in the environment (so a real CI secret always wins over a stale .env).
+$envFile = "$repoRoot/.env"
+if (Test-Path $envFile) {
+    Write-Host "==> Loading $envFile" -ForegroundColor Cyan
+    foreach ($line in Get-Content $envFile) {
+        if ($line -match '^\s*#' -or $line -notmatch '=') { continue }
+        $key, $value = $line -split '=', 2
+        $key = $key.Trim()
+        if (-not (Get-Item "env:$key" -ErrorAction SilentlyContinue) -and $value) {
+            [System.Environment]::SetEnvironmentVariable($key, $value.Trim())
+        }
+    }
+}
+
 if (-not (Get-Command vpk -ErrorAction SilentlyContinue)) {
     Write-Warning "vpk (the Velopack CLI) isn't on PATH. Install it with: dotnet tool install -g vpk"
     exit 1

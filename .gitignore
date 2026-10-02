@@ -13,6 +13,9 @@ ui/SrtEncoderApp/ffmpeg/
 # Velopack release output (release.ps1) — built artifacts, not source
 /releases/
 
+# Local secrets for release.ps1 (AZURE_CLIENT_SECRET etc.) — see .env.example
+/.env
+
 # Visual Studio / editor
 .vs/
 *.user
