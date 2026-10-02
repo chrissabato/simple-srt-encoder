@@ -1,4 +1,4 @@
-#requires -Version 5.1
+﻿#requires -Version 5.1
 <#
 .SYNOPSIS
     Publishes SrtEncoderApp and packages/uploads it as a Velopack release on GitHub.
@@ -64,7 +64,10 @@ param(
 
     [string]$OutputDir = 'releases',
 
-    [string]$AzureTrustedSignFile = "$PSScriptRoot/azure-trusted-signing-metadata.json",
+    # $null (not passed) picks the repo-root default below; pass '' explicitly to opt
+    # out of signing instead ($PSScriptRoot isn't reliably populated yet this early, in
+    # a parameter default expression, in Windows PowerShell 5.1 — resolved in the body).
+    $AzureTrustedSignFile = $null,
 
     [string]$SignTemplate,
 
@@ -81,7 +84,10 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = $PSScriptRoot
 $appId = 'SrtEncoderApp'
 $csproj = "$repoRoot/ui/SrtEncoderApp/SrtEncoderApp.csproj"
-$publishDir = "$repoRoot/ui/SrtEncoderApp/bin/x64/Release/net10.0-windows10.0.26100.0/win-x64/publish"
+$publishDir = "$repoRoot/ui/SrtEncoderApp/bin/Release/net10.0-windows10.0.26100.0/win-x64/publish"
+if ($null -eq $AzureTrustedSignFile) {
+    $AzureTrustedSignFile = "$repoRoot/azure-trusted-signing-metadata.json"
+}
 
 # Load .env (gitignored — see .env.example) if present, without overwriting anything
 # already set in the environment (so a real CI secret always wins over a stale .env).
