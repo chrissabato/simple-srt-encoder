@@ -33,9 +33,9 @@ See the project plan for full context. Summary of the load-bearing decisions:
   running from a Velopack-installed copy) + `MainViewModel.CheckForUpdatesAsync`/
   `InstallUpdateAndRestartAsync` (checked once at startup, surfaced via an InfoBar in
   `MainPage.xaml`). `release.ps1` publishes, `vpk pack`s, and (given `-RepoUrl`)
-  `vpk upload github`s a release — see its header for the remaining TODOs: set
-  `UpdateService.GithubRepoUrl` once the repo exists on GitHub, and decide signing
-  (unsigned is fine for local testing, not for anything end users download).
+  `vpk upload github`s a release to https://github.com/chrissabato/srt-encoder — the
+  remaining TODO is signing (unsigned is fine for local testing, not for anything end
+  users download; see `release.ps1 -AzureTrustedSignFile`).
   **Known risk, not yet resolved**: an earlier *unpackaged* launch on this project's own
   dev machine crashed (`REGDB_E_CLASSNOTREG`/`0xc000027b`) even with
   `WindowsAppSDKSelfContained=true` set — only the MSIX/packaged launch path was confirmed

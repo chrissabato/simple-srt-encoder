@@ -12,10 +12,10 @@ namespace SrtEncoderApp.Services;
 /// </summary>
 internal sealed class UpdateService
 {
-    // TODO: set this once the repo exists on GitHub (public, so no access token is needed
-    // here — see GithubSource's accessToken param below, intentionally left empty).
-    // Releases get published there via `release.ps1`'s `vpk upload github` step.
-    private const string GithubRepoUrl = "https://github.com/TODO-set-owner/TODO-set-repo";
+    // Public repo, so no access token is needed here — see GithubSource's accessToken
+    // param below, intentionally left empty. Releases get published via release.ps1's
+    // `vpk upload github` step.
+    private const string GithubRepoUrl = "https://github.com/chrissabato/srt-encoder";
 
     private readonly UpdateManager _manager = new(new GithubSource(GithubRepoUrl, accessToken: "", prerelease: false));
 
