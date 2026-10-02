@@ -1,4 +1,5 @@
 #include "FramePipeWriter.h"
+#include "../Diagnostics.h"
 
 namespace capturecore {
 
@@ -19,6 +20,17 @@ FramePipeWriter::FramePipeWriter(const std::wstring& pipeName) {
         0,
         0,
         nullptr);
+
+    if (m_pipe == INVALID_HANDLE_VALUE) {
+        // Was previously silent: WaitForConnection() just returns false instantly (its
+        // own INVALID_HANDLE_VALUE guard) with nothing to explain why, indistinguishable
+        // in the log from a real 5s timeout unless someone reads timestamps closely. The
+        // most likely cause (confirmed once already) is a leftover FramePipeWriter from a
+        // previous session still holding this same pipe name (nMaxInstances=1) — see the
+        // reset() calls in CaptureManager::StartStream() that guard against that.
+        LogDiagnostic(L"FramePipeWriter: CreateNamedPipeW failed for '" + pipeName +
+                      L"', error=" + std::to_wstring(GetLastError()));
+    }
 }
 
 FramePipeWriter::~FramePipeWriter() {

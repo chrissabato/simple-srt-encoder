@@ -64,6 +64,21 @@ internal static partial class NativeMethods
     public static extern int CaptureCore_EnumerateDevices(nint handle, [Out] CcDeviceInfo[] outArray, int maxCount);
 
     [DllImport(CaptureCoreLibrary, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int CaptureCore_EnumerateAudioDevices(nint handle, [Out] CcAudioDeviceInfo[] outArray, int maxCount);
+
+    [DllImport(CaptureCoreLibrary, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int CaptureCore_StartAudioMonitor(nint handle, in CcDeviceId id);
+
+    [DllImport(CaptureCoreLibrary, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void CaptureCore_StopAudioMonitor(nint handle);
+
+    [DllImport(CaptureCoreLibrary, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int CaptureCore_GetLoudness(nint handle, out CcLoudness outLoudness);
+
+    [DllImport(CaptureCoreLibrary, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void CaptureCore_ResetLoudness(nint handle);
+
+    [DllImport(CaptureCoreLibrary, CallingConvention = CallingConvention.Cdecl)]
     public static extern int CaptureCore_OpenSource(nint handle, in CcDeviceId id, in CcCaptureFormat format);
 
     [DllImport(CaptureCoreLibrary, CallingConvention = CallingConvention.Cdecl)]
@@ -86,4 +101,7 @@ internal static partial class NativeMethods
 
     [DllImport(CaptureCoreLibrary, CallingConvention = CallingConvention.Cdecl)]
     public static extern int CaptureCore_GetStreamStats(nint handle, out CcStreamStats outStats);
+
+    [DllImport(CaptureCoreLibrary, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Unicode)]
+    public static extern int CaptureCore_ProbeEncoder(nint handle, string encoderName, string? ffmpegExeName);
 }

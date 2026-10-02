@@ -42,6 +42,20 @@ CAPTURECORE_API int32_t CaptureCore_IsBackendAvailable(CcBackendType backend);
 // sized to the returned count if so).
 CAPTURECORE_API int32_t CaptureCore_EnumerateDevices(CaptureCoreHandle handle, CcDeviceInfo* outArray, int32_t maxCount);
 
+// Fills outArray with up to maxCount active WASAPI audio capture endpoints (mics/line-in).
+// Same overflow convention as CaptureCore_EnumerateDevices.
+CAPTURECORE_API int32_t CaptureCore_EnumerateAudioDevices(CaptureCoreHandle handle, CcAudioDeviceInfo* outArray, int32_t maxCount);
+
+// --- Audio loudness monitor -----------------------------------------------------------
+// Meters the chosen audio device independently of streaming so levels are visible before
+// going live. Pass CC_EMBEDDED_AUDIO_DEVICE_ID for embedded source audio, which can only be
+// metered while streaming (its buffer has a single consumer). Streaming start resets the meter.
+
+CAPTURECORE_API int32_t CaptureCore_StartAudioMonitor(CaptureCoreHandle handle, const CcDeviceId* id);
+CAPTURECORE_API void CaptureCore_StopAudioMonitor(CaptureCoreHandle handle);
+CAPTURECORE_API int32_t CaptureCore_GetLoudness(CaptureCoreHandle handle, CcLoudness* outLoudness);
+CAPTURECORE_API void CaptureCore_ResetLoudness(CaptureCoreHandle handle);
+
 // --- Capture source ---------------------------------------------------------------
 
 CAPTURECORE_API int32_t CaptureCore_OpenSource(CaptureCoreHandle handle, const CcDeviceId* id, const CcCaptureFormat* format);
@@ -66,3 +80,15 @@ CAPTURECORE_API int32_t CaptureCore_IsStreaming(CaptureCoreHandle handle);
 // Polled (not pushed) to avoid cross-boundary callback/GC lifetime issues at high
 // frequency; call from a UI timer at a few Hz.
 CAPTURECORE_API int32_t CaptureCore_GetStreamStats(CaptureCoreHandle handle, CcStreamStats* outStats);
+
+// Runs a tiny real test-encode through the named ffmpeg encoder (e.g. "h264_nvenc") to
+// check it's actually usable on this machine right now — catches runtime-only failures
+// (GPU driver too old for the required hardware-encode API version, no such GPU present,
+// ...) that a compile-time "does ffmpeg support this encoder name" check can't see.
+// Result is cached per (ffmpegExeName, encoderName) pair for this handle's lifetime. May
+// take up to ~5s the first time it's asked about a given pair; near-instant on repeat
+// calls — don't call from a latency-sensitive path, and prefer resolving "auto" once per
+// stream start rather than per UI refresh. ffmpegExeName selects which ffmpeg\<name>.exe
+// to probe (see CcEncodeSettings.ffmpegExeName); null or empty means the default
+// "ffmpeg.exe".
+CAPTURECORE_API int32_t CaptureCore_ProbeEncoder(CaptureCoreHandle handle, const wchar_t* encoderName, const wchar_t* ffmpegExeName);

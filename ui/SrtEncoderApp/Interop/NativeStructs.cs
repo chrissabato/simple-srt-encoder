@@ -21,6 +21,7 @@ internal enum CcBackendType : int
     Uvc = 0,
     DeckLink = 1,
     Ndi = 2,
+    DirectShow = 3,
 }
 
 internal enum CcPixelFormat : int
@@ -64,6 +65,14 @@ internal struct CcDeviceId
 internal struct CcDeviceInfo
 {
     public CcBackendType Backend;
+    public CcDeviceId Id;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = NativeStructs.MaxString)]
+    public string DisplayName;
+}
+
+[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+internal struct CcAudioDeviceInfo
+{
     public CcDeviceId Id;
     [MarshalAs(UnmanagedType.ByValTStr, SizeConst = NativeStructs.MaxString)]
     public string DisplayName;
@@ -113,6 +122,12 @@ internal struct CcEncodeSettings
     public CcRational OutputFrameRate;
     public int AudioEnabled;
     public int AudioBitrateKbps;
+    public CcDeviceId AudioDeviceId;
+
+    // Which ffmpeg\<name>.exe to launch; empty means the default "ffmpeg.exe" — see
+    // CaptureCoreService.ProbeEncoder and MainViewModel.ResolveEncoder.
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = NativeStructs.MaxShortString)]
+    public string FfmpegExeName;
 }
 
 [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
@@ -128,6 +143,15 @@ internal struct CcSrtSettings
     public int PbKeyLen;
     [MarshalAs(UnmanagedType.ByValTStr, SizeConst = NativeStructs.MaxString)]
     public string StreamId;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct CcLoudness
+{
+    public double MomentaryLufs;
+    public double ShortTermLufs;
+    public double IntegratedLufs;
+    public double PeakDbfs;
 }
 
 [StructLayout(LayoutKind.Sequential)]

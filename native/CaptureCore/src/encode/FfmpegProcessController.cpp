@@ -3,6 +3,7 @@
 #include "../Diagnostics.h"
 
 #include <algorithm>
+#include <chrono>
 #include <sstream>
 #include <vector>
 
@@ -57,8 +58,67 @@ FfmpegProcessController::~FfmpegProcessController() {
     Stop();
 }
 
-std::wstring FfmpegProcessController::FindFfmpegExePath() {
-    return GetExecutableDirectory() + L"\\ffmpeg\\ffmpeg.exe";
+std::wstring FfmpegProcessController::FindFfmpegExePath(const std::wstring& exeName) {
+    return GetExecutableDirectory() + L"\\ffmpeg\\" + (exeName.empty() ? L"ffmpeg.exe" : exeName);
+}
+
+bool FfmpegProcessController::ProbeEncoder(const std::wstring& encoderName, const std::wstring& exeName) {
+    SECURITY_ATTRIBUTES pipeSecurity{};
+    pipeSecurity.nLength = sizeof(SECURITY_ATTRIBUTES);
+    pipeSecurity.bInheritHandle = TRUE;
+
+    HANDLE nulHandle = CreateFileW(
+        L"NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+        &pipeSecurity, OPEN_EXISTING, 0, nullptr);
+    if (!nulHandle) {
+        return false;
+    }
+
+    STARTUPINFOW startupInfo{};
+    startupInfo.cb = sizeof(STARTUPINFOW);
+    startupInfo.dwFlags = STARTF_USESTDHANDLES;
+    startupInfo.hStdInput = nulHandle;
+    startupInfo.hStdOutput = nulHandle;
+    startupInfo.hStdError = nulHandle;
+
+    // A single synthetic frame through the real encoder — the only reliable way to catch
+    // a runtime-only failure (e.g. an NVENC driver too old for this ffmpeg build's
+    // required API version). Whether ffmpeg was merely *compiled* with an encoder name
+    // says nothing about whether the actual GPU/driver on this machine can use it.
+    std::wstringstream cmd;
+    cmd << L"\"" << FindFfmpegExePath(exeName) << L"\""
+        << L" -hide_banner -loglevel quiet -y"
+        << L" -f lavfi -i nullsrc=s=64x64:r=1:d=0.1"
+        << L" -frames:v 1 -c:v " << encoderName
+        << L" -f null -";
+
+    std::wstring commandLine = cmd.str();
+    std::vector<wchar_t> mutableCommandLine(commandLine.begin(), commandLine.end());
+    mutableCommandLine.push_back(L'\0');
+
+    PROCESS_INFORMATION processInfo{};
+    const BOOL created = CreateProcessW(
+        nullptr, mutableCommandLine.data(), nullptr, nullptr, /*bInheritHandles=*/TRUE,
+        CREATE_NO_WINDOW, nullptr, nullptr, &startupInfo, &processInfo);
+    CloseHandle(nulHandle);
+
+    if (!created) {
+        return false;
+    }
+
+    // A probe must never hang its caller if ffmpeg somehow wedges; treat a timeout as
+    // failure and clean up the stuck process rather than blocking indefinitely.
+    const bool exited = WaitForSingleObject(processInfo.hProcess, 5000) == WAIT_OBJECT_0;
+    DWORD exitCode = 1;
+    if (exited) {
+        GetExitCodeProcess(processInfo.hProcess, &exitCode);
+    } else {
+        TerminateProcess(processInfo.hProcess, 1);
+    }
+    CloseHandle(processInfo.hProcess);
+    CloseHandle(processInfo.hThread);
+
+    return exited && exitCode == 0;
 }
 
 std::wstring FfmpegProcessController::BuildCommandLine(
@@ -66,20 +126,44 @@ std::wstring FfmpegProcessController::BuildCommandLine(
     const CcSrtSettings& srt,
     const std::wstring& pipeName,
     int32_t sourceWidth,
-    int32_t sourceHeight) const {
+    int32_t sourceHeight,
+    const AudioPipeConfig& audio) const {
     const int32_t frameRateNum = std::max(1, encode.outputFrameRate.numerator);
     const int32_t frameRateDen = std::max(1, encode.outputFrameRate.denominator);
     const int32_t wholeFps = std::max(1, frameRateNum / frameRateDen);
     const int32_t gop = std::max(1, encode.keyframeIntervalSec * wholeFps);
 
+    // -thread_queue_size: the default (8 packets) is sized for on-demand file inputs, not
+    // continuous live pipes fed by separate threads — too small here risks ffmpeg's input
+    // queue filling and packets being dropped under any momentary scheduling hiccup.
+    //
+    // NOTE: -use_wallclock_as_timestamps was tried here (2026-09-29) to fix an A/V-sync
+    // report and reverted the same day — it corrupted audio entirely. Reproduced in
+    // isolation: two independently-scheduled real threads feeding separate raw inputs
+    // produce wallclock timestamps that are NOT cleanly monotonic once interleaved,
+    // which made ffmpeg's AAC encoder queue see input "backward in time" repeatedly
+    // (`Non-monotonic DTS`, `Queue input is backward in time`, large `drop=` counts) —
+    // exactly consistent with the resulting "no audio at all" regression. Do not re-add
+    // this flag; if A/V sync is revisited, look elsewhere (e.g. actual pipe-connect
+    // startup skew between the two inputs, or explicit -itsoffset on whichever stream is
+    // consistently ahead) rather than wallclock timestamping raw threaded pipe inputs.
     std::wstringstream cmd;
-    cmd << L"\"" << FindFfmpegExePath() << L"\""
+    cmd << L"\"" << FindFfmpegExePath(encode.ffmpegExeName) << L"\""
         << L" -hide_banner -loglevel warning -y"
+        << L" -thread_queue_size 1024"
         << L" -f rawvideo -pix_fmt bgra -s " << sourceWidth << L"x" << sourceHeight
         << L" -r " << frameRateNum << L"/" << frameRateDen
-        << L" -i \"" << pipeName << L"\""
-        << L" -an" // audio capture is a Phase 4 item; not wired up yet
-        << L" -c:v " << encode.encoderImpl;
+        << L" -i \"" << pipeName << L"\"";
+
+    if (audio.enabled) {
+        cmd << L" -thread_queue_size 1024"
+            << L" -f " << (audio.isFloat ? L"f32le" : L"s16le")
+            << L" -ar " << audio.sampleRate
+            << L" -ac " << audio.channels
+            << L" -i \"" << audio.pipeName << L"\"";
+    }
+
+    cmd << L" -c:v " << encode.encoderImpl;
 
     if (std::wstring(encode.encoderImpl) == L"libx264" && encode.x264Preset[0] != L'\0') {
         cmd << L" -preset " << encode.x264Preset;
@@ -99,6 +183,31 @@ std::wstring FfmpegProcessController::BuildCommandLine(
         cmd << L" -s " << encode.outputWidth << L"x" << encode.outputHeight;
     }
 
+    if (audio.enabled) {
+        // aresample=async=1: the video pump (paced by our own steady_clock loop) and
+        // WASAPI audio capture (paced by its own real hardware clock) are two
+        // independent clocks with no shared reference — even a tiny relative rate
+        // difference between them (a few hundred ppm is normal for two unrelated
+        // clocks) accumulates into audible A/V drift over a long-running stream
+        // (confirmed: fine for ~60s, then noticeably desynced). async resampling
+        // corrects this at the sample level — smoothly stretching/compressing audio to
+        // track the video timeline — which is the standard fix for exactly this failure
+        // mode. Deliberately NOT using -use_wallclock_as_timestamps for this (tried and
+        // reverted the same day it was added: timestamping raw packets from two
+        // independently-scheduled threads produced non-monotonic DTS and broke audio
+        // entirely — see the comment above this function's ffmpeg path resolution).
+        // first_pts=0 also normalizes the very start so a startup pipe-connect skew
+        // between video and audio doesn't bake in an initial offset on top of the drift.
+        //
+        // Force the output rate: AAC only accepts a fixed set of sample rates, and the
+        // WASAPI-negotiated input rate (audio.sampleRate) isn't guaranteed to be one of
+        // them — ffmpeg resamples automatically when input/output -ar differ.
+        cmd << L" -af aresample=async=1:first_pts=0"
+            << L" -c:a aac -b:a " << encode.audioBitrateKbps << L"k -ar 48000";
+    } else {
+        cmd << L" -an";
+    }
+
     cmd << L" -f mpegts \"" << BuildSrtUrl(srt) << L"\""
         << L" -progress pipe:1";
 
@@ -110,9 +219,25 @@ bool FfmpegProcessController::Start(
     const CcSrtSettings& srt,
     const std::wstring& pipeName,
     int32_t sourceWidth,
-    int32_t sourceHeight) {
+    int32_t sourceHeight,
+    const AudioPipeConfig& audio) {
     if (m_running.load()) {
         return false;
+    }
+
+    // If the previous ffmpeg process exited on its own (crash, SRT connect
+    // failure/timeout, ...) without Stop() ever being called, m_progressThread finished
+    // running but was never join()ed — std::thread stays joinable() until join()/detach()
+    // regardless of whether its function has already returned. Reassigning it below via
+    // `m_progressThread = std::thread(...)` while it's still joinable is undefined
+    // behavior that calls std::terminate() per the standard, which is exactly the
+    // "Debug Error / abort()" crash seen after a broken stream was restarted without an
+    // intervening Stop(). Join it first so the reassignment is always safe.
+    if (m_progressThread.joinable()) {
+        m_progressThread.join();
+    }
+    if (m_stderrThread.joinable()) {
+        m_stderrThread.join();
     }
 
     SECURITY_ATTRIBUTES pipeSecurity{};
@@ -125,6 +250,15 @@ bool FfmpegProcessController::Start(
     }
     SetHandleInformation(m_stdoutReadPipe, HANDLE_FLAG_INHERIT, 0);
 
+    HANDLE stderrWrite = nullptr;
+    if (!CreatePipe(&m_stderrReadPipe, &stderrWrite, &pipeSecurity, 0)) {
+        CloseHandle(m_stdoutReadPipe);
+        m_stdoutReadPipe = nullptr;
+        CloseHandle(stdoutWrite);
+        return false;
+    }
+    SetHandleInformation(m_stderrReadPipe, HANDLE_FLAG_INHERIT, 0);
+
     // stdin is a pipe (not NUL) so Stop() can ask ffmpeg to quit gracefully by writing
     // 'q' — its documented interactive-mode quit command — rather than only ever
     // force-killing it, which otherwise ends the SRT session abruptly (the receiving
@@ -133,22 +267,29 @@ bool FfmpegProcessController::Start(
     if (!CreatePipe(&stdinRead, &m_stdinWritePipe, &pipeSecurity, 0)) {
         CloseHandle(m_stdoutReadPipe);
         m_stdoutReadPipe = nullptr;
+        CloseHandle(m_stderrReadPipe);
+        m_stderrReadPipe = nullptr;
+        CloseHandle(stderrWrite);
         return false;
     }
     SetHandleInformation(m_stdinWritePipe, HANDLE_FLAG_INHERIT, 0);
-
-    HANDLE nulHandle = CreateFileW(
-        L"NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
-        &pipeSecurity, OPEN_EXISTING, 0, nullptr);
 
     STARTUPINFOW startupInfo{};
     startupInfo.cb = sizeof(STARTUPINFOW);
     startupInfo.dwFlags = STARTF_USESTDHANDLES;
     startupInfo.hStdInput = stdinRead;
     startupInfo.hStdOutput = stdoutWrite;
-    startupInfo.hStdError = nulHandle;
+    startupInfo.hStdError = stderrWrite;
 
-    std::wstring commandLine = BuildCommandLine(encode, srt, pipeName, sourceWidth, sourceHeight);
+    std::wstring commandLine = BuildCommandLine(encode, srt, pipeName, sourceWidth, sourceHeight, audio);
+    // Logged unconditionally (not just on failure): the alternative is reconstructing it
+    // by hand from settings whenever ffmpeg rejects something, which is slow and has
+    // already produced at least one wrong guess this session (a hand-built repro that
+    // didn't actually match the real generated command and so didn't reproduce a real
+    // argument-parsing bug). Passphrase/streamid could appear in here via the SRT URL —
+    // this file is already local-machine-only diagnostic output in the same place
+    // ffmpeg's own stderr is captured, not a new exposure.
+    LogDiagnostic(L"FfmpegProcessController::Start: " + commandLine);
     std::vector<wchar_t> mutableCommandLine(commandLine.begin(), commandLine.end());
     mutableCommandLine.push_back(L'\0');
 
@@ -166,18 +307,19 @@ bool FfmpegProcessController::Start(
         &m_processInfo);
 
     // The child has its own handles to these now (or failed to start); the parent's
-    // copies must be closed so ReadFile on m_stdoutReadPipe unblocks on child exit.
+    // copies must be closed so ReadFile on m_stdoutReadPipe/m_stderrReadPipe unblocks on
+    // child exit.
     CloseHandle(stdoutWrite);
     CloseHandle(stdinRead);
-    if (nulHandle) {
-        CloseHandle(nulHandle);
-    }
+    CloseHandle(stderrWrite);
 
     if (!created) {
         CloseHandle(m_stdoutReadPipe);
         m_stdoutReadPipe = nullptr;
         CloseHandle(m_stdinWritePipe);
         m_stdinWritePipe = nullptr;
+        CloseHandle(m_stderrReadPipe);
+        m_stderrReadPipe = nullptr;
         return false;
     }
 
@@ -189,13 +331,52 @@ bool FfmpegProcessController::Start(
         m_stats.connectionState = CcConnectionState::Connecting;
     }
     m_progressThread = std::thread(&FfmpegProcessController::ProgressThreadMain, this);
+    m_stderrThread = std::thread(&FfmpegProcessController::StderrThreadMain, this);
     return true;
+}
+
+void FfmpegProcessController::StderrThreadMain() {
+    std::string lineBuffer;
+    char readBuffer[4096];
+
+    for (;;) {
+        DWORD bytesRead = 0;
+        const BOOL ok = ReadFile(m_stderrReadPipe, readBuffer, sizeof(readBuffer), &bytesRead, nullptr);
+        if (!ok || bytesRead == 0) {
+            break; // pipe closed: ffmpeg exited
+        }
+        lineBuffer.append(readBuffer, bytesRead);
+
+        size_t newlinePos;
+        while ((newlinePos = lineBuffer.find('\n')) != std::string::npos) {
+            std::string line = lineBuffer.substr(0, newlinePos);
+            lineBuffer.erase(0, newlinePos + 1);
+            if (!line.empty() && line.back() == '\r') {
+                line.pop_back();
+            }
+            if (!line.empty()) {
+                std::wstring wLine(line.begin(), line.end()); // ffmpeg's own log text is ASCII/UTF-8-as-bytes here
+                LogDiagnostic(L"ffmpeg: " + wLine);
+            }
+        }
+    }
+    // Flush any final partial line ffmpeg wrote without a trailing newline before exiting.
+    if (!lineBuffer.empty()) {
+        std::wstring wLine(lineBuffer.begin(), lineBuffer.end());
+        LogDiagnostic(L"ffmpeg: " + wLine);
+    }
 }
 
 void FfmpegProcessController::ProgressThreadMain() {
     LogDiagnostic(L"ProgressThreadMain: started");
     std::string lineBuffer;
     char readBuffer[4096];
+    // Real-time encode performance (fps vs. target, growing bitrate/queue backlog) was
+    // previously invisible outside the live UI — logged periodically now so a
+    // fell-behind-real-time encoder (the suspected cause of a growing A/V delay that
+    // survived the audio-queue fix — i.e. NOT lost upstream, just perpetually late) is
+    // diagnosable after the fact instead of needing someone watching the stats bar live.
+    auto lastProgressLogTime = std::chrono::steady_clock::now() - std::chrono::seconds(10);
 
     for (;;) {
         DWORD bytesRead = 0;
@@ -215,8 +396,24 @@ void FfmpegProcessController::ProgressThreadMain() {
                 line.pop_back();
             }
             std::wstring wLine(line.begin(), line.end()); // progress keys/values are ASCII
-            std::lock_guard<std::mutex> lock(m_statsMutex);
-            ApplyProgressLine(wLine, m_stats);
+
+            CcStreamStats snapshot{};
+            {
+                std::lock_guard<std::mutex> lock(m_statsMutex);
+                ApplyProgressLine(wLine, m_stats);
+                snapshot = m_stats;
+            }
+
+            if (wLine.rfind(L"progress=", 0) == 0) {
+                const auto now = std::chrono::steady_clock::now();
+                if (now - lastProgressLogTime >= std::chrono::seconds(5)) {
+                    lastProgressLogTime = now;
+                    LogDiagnostic(L"progress: fps=" + std::to_wstring(snapshot.fps) +
+                                  L" bitrateKbps=" + std::to_wstring(snapshot.bitrateKbps) +
+                                  L" framesEncoded=" + std::to_wstring(snapshot.framesEncoded) +
+                                  L" droppedFrames=" + std::to_wstring(snapshot.droppedFrames));
+                }
+            }
         }
     }
 
@@ -276,9 +473,17 @@ void FfmpegProcessController::Stop() {
     }
     LogDiagnostic(L"  progress thread joined");
 
+    if (m_stderrThread.joinable()) {
+        m_stderrThread.join();
+    }
+
     if (m_stdoutReadPipe) {
         CloseHandle(m_stdoutReadPipe);
         m_stdoutReadPipe = nullptr;
+    }
+    if (m_stderrReadPipe) {
+        CloseHandle(m_stderrReadPipe);
+        m_stderrReadPipe = nullptr;
     }
     if (m_stdinWritePipe) {
         CloseHandle(m_stdinWritePipe);

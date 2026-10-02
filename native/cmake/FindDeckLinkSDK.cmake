@@ -10,14 +10,17 @@ Search order:
 
 On success, defines:
   DeckLinkSDK_FOUND
-  DeckLinkSDK_INCLUDE_DIR  - directory containing DeckLinkAPI.h / DeckLinkAPI_i.c
+  DeckLinkSDK_INCLUDE_DIR  - directory containing DeckLinkAPI.idl (and the other .idl
+                             files it #imports)
 
-Does not require any library to link against — the DeckLink SDK ships its COM interface
-headers plus a generated IDL-derived .c file that the consuming target compiles directly.
+Windows ships raw .idl files, not a pre-generated header (unlike Mac/Linux) — the
+consuming CMakeLists.txt compiles DeckLinkAPI.idl with midl.exe at build time to produce
+DeckLinkAPI.h and DeckLinkAPI_i.c, so this module looks for the .idl itself as the
+"is the SDK present" marker, not a header that doesn't exist yet.
 ]]
 
 find_path(DeckLinkSDK_INCLUDE_DIR
-    NAMES DeckLinkAPI.h
+    NAMES DeckLinkAPI.idl
     HINTS
         "$ENV{DECKLINK_SDK_DIR}"
         "${CMAKE_SOURCE_DIR}/vendor/DeckLinkSDK"

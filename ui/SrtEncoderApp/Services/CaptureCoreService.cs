@@ -49,6 +49,69 @@ internal sealed class CaptureCoreService : IDisposable
         return result;
     }
 
+    public IReadOnlyList<CaptureDeviceInfo> EnumerateAudioDevices()
+    {
+        if (!IsAvailable)
+        {
+            return Array.Empty<CaptureDeviceInfo>();
+        }
+
+        var handle = _handle.DangerousGetHandle();
+
+        var count = NativeMethods.CaptureCore_EnumerateAudioDevices(handle, Array.Empty<CcAudioDeviceInfo>(), 0);
+        if (count <= 0)
+        {
+            return Array.Empty<CaptureDeviceInfo>();
+        }
+
+        var native = new CcAudioDeviceInfo[count];
+        var actual = NativeMethods.CaptureCore_EnumerateAudioDevices(handle, native, native.Length);
+        var resultCount = Math.Min(actual, native.Length);
+
+        var result = new List<CaptureDeviceInfo>(resultCount);
+        for (var i = 0; i < resultCount; i++)
+        {
+            result.Add(new CaptureDeviceInfo("Wasapi", native[i].Id.Value, native[i].DisplayName));
+        }
+        return result;
+    }
+
+    public bool StartAudioMonitor(string deviceId)
+    {
+        if (!IsAvailable)
+        {
+            return false;
+        }
+        var id = new CcDeviceId { Value = TruncateForNativeBuffer(deviceId, NativeStructs.MaxString) };
+        return NativeMethods.CaptureCore_StartAudioMonitor(_handle.DangerousGetHandle(), in id) != 0;
+    }
+
+    public void StopAudioMonitor()
+    {
+        if (IsAvailable)
+        {
+            NativeMethods.CaptureCore_StopAudioMonitor(_handle.DangerousGetHandle());
+        }
+    }
+
+    public LoudnessReading GetLoudness()
+    {
+        if (!IsAvailable)
+        {
+            return LoudnessReading.Silent;
+        }
+        NativeMethods.CaptureCore_GetLoudness(_handle.DangerousGetHandle(), out var native);
+        return new LoudnessReading(native.MomentaryLufs, native.ShortTermLufs, native.IntegratedLufs, native.PeakDbfs);
+    }
+
+    public void ResetLoudness()
+    {
+        if (IsAvailable)
+        {
+            NativeMethods.CaptureCore_ResetLoudness(_handle.DangerousGetHandle());
+        }
+    }
+
     public bool IsBackendAvailable(string backend) =>
         IsAvailable &&
         Enum.TryParse<CcBackendType>(backend, ignoreCase: true, out var parsed) &&
@@ -122,7 +185,8 @@ internal sealed class CaptureCoreService : IDisposable
     }
 
     /// <param name="plaintextPassphrase">Decrypted just before this call — see PresetService's DPAPI handling. Never logged or persisted by this layer.</param>
-    public bool StartStream(PresetEncode encode, PresetSrt srt, string plaintextPassphrase)
+    /// <param name="ffmpegExeName">Which ffmpeg\&lt;name&gt;.exe to launch (see MainViewModel.ResolveEncoder); empty for the default "ffmpeg.exe". Not part of PresetEncode — this is a per-machine resolution detail, not something a portable preset should hardcode.</param>
+    public bool StartStream(PresetEncode encode, PresetSrt srt, string plaintextPassphrase, string ffmpegExeName = "")
     {
         if (!IsAvailable)
         {
@@ -132,6 +196,7 @@ internal sealed class CaptureCoreService : IDisposable
         var encodeNative = new CcEncodeSettings
         {
             EncoderImpl = TruncateForNativeBuffer(encode.EncoderImpl, NativeStructs.MaxShortString),
+            FfmpegExeName = TruncateForNativeBuffer(ffmpegExeName, NativeStructs.MaxShortString),
             RateControl = string.Equals(encode.RateControl, "vbr", StringComparison.OrdinalIgnoreCase)
                 ? CcRateControl.Vbr
                 : CcRateControl.Cbr,
@@ -147,8 +212,9 @@ internal sealed class CaptureCoreService : IDisposable
                 Numerator = encode.OutputFrameRateNumerator,
                 Denominator = encode.OutputFrameRateDenominator,
             },
-            AudioEnabled = 0, // audio capture not implemented yet (Phase 4)
-            AudioBitrateKbps = 0,
+            AudioEnabled = encode.AudioEnabled ? 1 : 0,
+            AudioBitrateKbps = encode.AudioBitrateKbps,
+            AudioDeviceId = new CcDeviceId { Value = TruncateForNativeBuffer(encode.AudioDeviceId, NativeStructs.MaxString) },
         };
 
         var srtNative = new CcSrtSettings
@@ -179,6 +245,10 @@ internal sealed class CaptureCoreService : IDisposable
     }
 
     public bool IsStreaming => IsAvailable && NativeMethods.CaptureCore_IsStreaming(_handle.DangerousGetHandle()) != 0;
+
+    /// <summary>Runs a real (tiny, synthetic) test-encode through the named ffmpeg\&lt;ffmpegExeName&gt;.exe build (empty for the default "ffmpeg.exe") to check the encoder actually works on this machine right now — see CaptureCore_ProbeEncoder. Can take a few seconds; cache the result rather than calling this on every UI refresh.</summary>
+    public bool ProbeEncoder(string encoderName, string ffmpegExeName = "") =>
+        IsAvailable && NativeMethods.CaptureCore_ProbeEncoder(_handle.DangerousGetHandle(), encoderName, ffmpegExeName) != 0;
 
     public StreamStats GetStats()
     {

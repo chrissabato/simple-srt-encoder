@@ -7,8 +7,10 @@ needed.
 
 - `native/vendor/DeckLinkSDK/` — Blackmagic DeckLink SDK, from
   https://www.blackmagicdesign.com/developer/ (needs a free Blackmagic account).
-  Expects `Win/include/DeckLinkAPI.h` inside this folder (i.e. the SDK zip's contents
-  extracted directly here).
+  Expects `Win/include/DeckLinkAPI.idl` inside this folder (i.e. the SDK zip's contents
+  extracted directly here — on Windows the SDK ships raw `.idl` files, not a
+  pre-generated header; `midl.exe`, which comes with the VS "Desktop development with
+  C++" workload, compiles it at build time).
 - `native/vendor/NdiSDK/` — NDI SDK, from https://ndi.video/for-developers/.
   Expects `Include/Processing.NDI.Lib.h` and `Lib/x64/Processing.NDI.Lib.x64.lib` inside
   this folder (the NDI SDK installer's install directory, copied/symlinked here).

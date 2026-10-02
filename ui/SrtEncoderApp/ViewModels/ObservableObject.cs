@@ -17,4 +17,9 @@ public abstract class ObservableObject : INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         return true;
     }
+
+    // For computed properties (e.g. CanEditSettings derived from IsStreaming) that need
+    // to notify independently of the backing field they're derived from.
+    protected void OnPropertyChanged([CallerMemberName] string? propertyName = null) =>
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
 }

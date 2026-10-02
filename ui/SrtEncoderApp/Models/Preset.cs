@@ -27,7 +27,11 @@ public sealed class PresetSource
 
 public sealed class PresetEncode
 {
-    public string EncoderImpl { get; set; } = "libx264";
+    // "auto" resolves to the best actually-working encoder at stream start (prefers
+    // NVIDIA, falls back automatically) — see MainViewModel.ResolveEncoder. Keeping this
+    // as the default means a preset saved on one machine still works correctly when
+    // loaded on another with different (or no) hardware encoding support.
+    public string EncoderImpl { get; set; } = "auto";
     public string RateControl { get; set; } = "cbr";
     public int BitrateKbps { get; set; } = 6000;
     public int MaxBitrateKbps { get; set; } = 6000;
@@ -38,6 +42,11 @@ public sealed class PresetEncode
     public int OutputHeight { get; set; } = 1080;
     public int OutputFrameRateNumerator { get; set; } = 30;
     public int OutputFrameRateDenominator { get; set; } = 1;
+
+    public bool AudioEnabled { get; set; }
+    public string AudioDeviceId { get; set; } = "";
+    public string AudioDeviceName { get; set; } = "";
+    public int AudioBitrateKbps { get; set; } = 128;
 }
 
 public sealed class PresetSrt

@@ -69,6 +69,27 @@ int32_t CaptureCore_EnumerateDevices(CaptureCoreHandle handle, CcDeviceInfo* out
     return ToManager(handle)->EnumerateDevices(outArray, maxCount);
 }
 
+int32_t CaptureCore_EnumerateAudioDevices(CaptureCoreHandle handle, CcAudioDeviceInfo* outArray, int32_t maxCount) {
+    return ToManager(handle)->EnumerateAudioDevices(outArray, maxCount);
+}
+
+int32_t CaptureCore_StartAudioMonitor(CaptureCoreHandle handle, const CcDeviceId* id) {
+    return ToManager(handle)->StartAudioMonitor(*id) ? 1 : 0;
+}
+
+void CaptureCore_StopAudioMonitor(CaptureCoreHandle handle) {
+    ToManager(handle)->StopAudioMonitor();
+}
+
+int32_t CaptureCore_GetLoudness(CaptureCoreHandle handle, CcLoudness* outLoudness) {
+    *outLoudness = ToManager(handle)->GetLoudness();
+    return 1;
+}
+
+void CaptureCore_ResetLoudness(CaptureCoreHandle handle) {
+    ToManager(handle)->ResetLoudness();
+}
+
 int32_t CaptureCore_OpenSource(CaptureCoreHandle handle, const CcDeviceId* id, const CcCaptureFormat* format) {
     return ToManager(handle)->OpenSource(*id, *format) ? 1 : 0;
 }
@@ -100,4 +121,8 @@ int32_t CaptureCore_IsStreaming(CaptureCoreHandle handle) {
 int32_t CaptureCore_GetStreamStats(CaptureCoreHandle handle, CcStreamStats* outStats) {
     *outStats = ToManager(handle)->GetStreamStats();
     return 1;
+}
+
+int32_t CaptureCore_ProbeEncoder(CaptureCoreHandle handle, const wchar_t* encoderName, const wchar_t* ffmpegExeName) {
+    return ToManager(handle)->ProbeEncoder(encoderName, ffmpegExeName ? ffmpegExeName : L"") ? 1 : 0;
 }
