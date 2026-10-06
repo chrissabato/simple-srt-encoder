@@ -12,6 +12,92 @@ using Microsoft::WRL::ComPtr;
 
 namespace capturecore {
 
+namespace {
+
+// bmdFormat8BitYUV is packed 4:2:2, byte order U0 Y0 V0 Y1 (the traditional
+// broadcast/SDI packing, same as DirectShowCaptureSource's UYVY path — see
+// ConvertUyvyRowToBgra32 there for the identical byte-order comment). Requesting this
+// native format instead of asking the card to convert to BGRA32 on-board turned out to
+// be necessary on real hardware (see the comment in StartCapture): a DeckLink Duo 2
+// sub-device running in its bandwidth-reduced 4-independent-input profile would
+// correctly auto-detect and "accept" a BGRA32 request for a real, cable-confirmed signal
+// (DoesSupportVideoMode even reported it as supported) yet every frame still came back
+// flagged bmdFrameHasNoInputSource forever — the on-card YUV->RGB conversion silently
+// never actually locked in that reduced-resource profile. Capturing native YUV (half the
+// per-pixel bandwidth of BGRA32, no on-card conversion at all) and converting to BGRA32
+// in software here instead is the same fix already proven necessary for UVC/DirectShow
+// sources on this project, applied to the same underlying class of problem.
+//
+// Uses the same precomputed-lookup-table ITU-R BT.601 math as
+// DirectShowCaptureSource.cpp's ConvertUyvyRowToBgra32 (see that file's comment for the
+// field-test numbers), not a naive per-pixel multiply — a first version of this function
+// used scalar multiplication directly and could not keep up with 1280x720@59.94fps in a
+// real test against a DeckLink Duo 2 (confirmed via a vMix control test on the identical
+// signal path showing no delay, ruling out the camera/converter): DeckLink's internal
+// frame queue backed up because conversion was slower than the incoming rate, so every
+// "latest" frame handed to the UI was in fact several seconds stale and never caught up.
+uint8_t ClampToByte(int value) {
+    return static_cast<uint8_t>(value < 0 ? 0 : (value > 255 ? 255 : value));
+}
+
+struct YuvToBgrTables {
+    int y[256];
+    int uToB[256];
+    int uToG[256];
+    int vToR[256];
+    int vToG[256];
+
+    YuvToBgrTables() {
+        for (int i = 0; i < 256; ++i) {
+            const int c = i - 16;
+            const int d = i - 128;
+            const int e = i - 128;
+            y[i] = 298 * c;
+            uToB[i] = 516 * d;
+            uToG[i] = -100 * d;
+            vToR[i] = 409 * e;
+            vToG[i] = -208 * e;
+        }
+    }
+};
+
+const YuvToBgrTables& GetYuvToBgrTables() {
+    static const YuvToBgrTables tables; // thread-safe init (C++11 magic statics)
+    return tables;
+}
+
+void YuvToBgr(int y, int u, int v, uint8_t& b, uint8_t& g, uint8_t& r) {
+    const YuvToBgrTables& t = GetYuvToBgrTables();
+    const int yTerm = t.y[y];
+    r = ClampToByte((yTerm + t.vToR[v] + 128) >> 8);
+    g = ClampToByte((yTerm + t.uToG[u] + t.vToG[v] + 128) >> 8);
+    b = ClampToByte((yTerm + t.uToB[u] + 128) >> 8);
+}
+
+void ConvertUyvyRowToBgra32(const uint8_t* srcRow, uint8_t* dstRow, int32_t width) {
+    for (int32_t x = 0; x + 1 < width; x += 2) {
+        const uint8_t* px = srcRow + static_cast<size_t>(x) * 2;
+        const int u = px[0], y0 = px[1], v = px[2], y1 = px[3];
+
+        uint8_t b, g, r;
+        YuvToBgr(y0, u, v, b, g, r);
+        uint8_t* dst0 = dstRow + static_cast<size_t>(x) * 4;
+        dst0[0] = b;
+        dst0[1] = g;
+        dst0[2] = r;
+        dst0[3] = 0xFF;
+
+        YuvToBgr(y1, u, v, b, g, r);
+        uint8_t* dst1 = dstRow + static_cast<size_t>(x + 1) * 4;
+        dst1[0] = b;
+        dst1[1] = g;
+        dst1[2] = r;
+        dst1[3] = 0xFF;
+    }
+}
+
+} // namespace
+
 DeckLinkCaptureSource::DeckLinkCaptureSource(ComPtr<IDeckLinkInput> input, const CcCaptureFormat& requestedFormat)
     : m_input(std::move(input)) {
     LogDiagnostic(L"DeckLinkCaptureSource: picking display mode...");
@@ -21,6 +107,10 @@ DeckLinkCaptureSource::DeckLinkCaptureSource(ComPtr<IDeckLinkInput> input, const
         throw std::runtime_error("GetDisplayModeIterator failed");
     }
 
+    LogDiagnostic(
+        L"  requested format: " + std::to_wstring(requestedFormat.width) + L"x" +
+        std::to_wstring(requestedFormat.height));
+
     BMDDisplayMode chosenMode = bmdModeUnknown;
     BMDDisplayMode firstMode = bmdModeUnknown;
     ComPtr<IDeckLinkDisplayMode> displayMode;
@@ -28,7 +118,14 @@ DeckLinkCaptureSource::DeckLinkCaptureSource(ComPtr<IDeckLinkInput> input, const
         const BMDDisplayMode mode = displayMode->GetDisplayMode();
         const int32_t width = static_cast<int32_t>(displayMode->GetWidth());
         const int32_t height = static_cast<int32_t>(displayMode->GetHeight());
-        LogDiagnostic(L"    mode: " + std::to_wstring(width) + L"x" + std::to_wstring(height));
+        BSTR modeName = nullptr;
+        std::wstring modeNameStr;
+        if (SUCCEEDED(displayMode->GetName(&modeName)) && modeName) {
+            modeNameStr = modeName;
+            SysFreeString(modeName);
+        }
+        LogDiagnostic(
+            L"    mode: " + std::to_wstring(width) + L"x" + std::to_wstring(height) + L" (" + modeNameStr + L")");
 
         if (firstMode == bmdModeUnknown) {
             firstMode = mode;
@@ -44,6 +141,7 @@ DeckLinkCaptureSource::DeckLinkCaptureSource(ComPtr<IDeckLinkInput> input, const
     }
     if (chosenMode == bmdModeUnknown) {
         chosenMode = firstMode;
+        LogDiagnostic(L"  no mode matched the requested size; falling back to the first enumerated mode");
     }
     if (chosenMode == bmdModeUnknown) {
         throw std::runtime_error("DeckLink device exposes no display modes");
@@ -56,8 +154,10 @@ DeckLinkCaptureSource::DeckLinkCaptureSource(ComPtr<IDeckLinkInput> input, const
             m_formatDetectionSupported = (supported != FALSE);
         }
     }
+    LogDiagnostic(
+        std::wstring(L"  format auto-detection supported: ") + (m_formatDetectionSupported ? L"yes" : L"no"));
 
-    if (!StartCapture(chosenMode, bmdFormat8BitBGRA)) {
+    if (!StartCapture(chosenMode, bmdFormat8BitYUV)) {
         throw std::runtime_error("Failed to start DeckLink capture");
     }
 
@@ -187,20 +287,45 @@ ULONG DeckLinkCaptureSource::Release() {
 HRESULT DeckLinkCaptureSource::VideoInputFormatChanged(
     BMDVideoInputFormatChangedEvents notificationEvents, IDeckLinkDisplayMode* newDisplayMode,
     BMDDetectedVideoInputFormatFlags /*detectedSignalFlags*/) {
-    if (!(notificationEvents & (bmdVideoInputDisplayModeChanged | bmdVideoInputColorspaceChanged))) {
+    // Only an actual display-mode (size/frame-rate) change requires restarting the
+    // stream with a new buffer geometry. A colorspace-only notification does NOT: we
+    // always request bmdFormat8BitBGRA regardless of the input's native colorspace (the
+    // card does that conversion on-board either way — see the comment below). Some
+    // sources/profiles report a colorspace-changed flag on every single frame (observed
+    // on a DeckLink Duo 2 sub-device running in its 4-independent-input profile) —
+    // restarting on that flag turned this into an infinite restart storm (StopStreams/
+    // EnableVideoInput/StartStreams every ~33ms) that never let a single frame reach
+    // VideoInputFrameArrived, so OpenSource always hit its 3s "no frame" timeout and
+    // failed, which looked like a black preview with an easy-to-miss status message.
+    if (!(notificationEvents & bmdVideoInputDisplayModeChanged)) {
         return S_OK;
     }
 
-    LogDiagnostic(L"DeckLinkCaptureSource: VideoInputFormatChanged, restarting with detected mode");
-    m_input->StopStreams();
-    // Re-request BGRA32 regardless of the detected colorspace — the card still does
-    // that conversion in hardware; only the display mode (size/frame rate) needs to
-    // follow what was actually detected on the input signal.
-    if (m_input->EnableVideoInput(newDisplayMode->GetDisplayMode(), bmdFormat8BitBGRA,
+    BSTR modeName = nullptr;
+    std::wstring modeNameStr;
+    if (SUCCEEDED(newDisplayMode->GetName(&modeName)) && modeName) {
+        modeNameStr = modeName;
+        SysFreeString(modeName);
+    }
+    LogDiagnostic(L"DeckLinkCaptureSource: VideoInputFormatChanged, restarting with detected mode " + modeNameStr);
+
+    // PauseStreams (not StopStreams) + FlushStreams between EnableVideoInput and
+    // StartStreams, matching Blackmagic's own documented sequence (see
+    // native/vendor/DeckLinkSDK/Examples/AutomaticModeDetection.cpp) — StopStreams tears
+    // the stream down fully rather than handing it over cleanly for a format change, and
+    // skipping FlushStreams left stale/queued frame state behind.
+    m_input->PauseStreams();
+    // Re-request native 8-bit YUV (not BGRA32 — see the namespace-scope comment above
+    // ConvertUyvyRowToBgra32 for why) regardless of the detected colorspace; only the
+    // display mode (size/frame rate) needs to follow what was actually detected.
+    if (m_input->EnableVideoInput(newDisplayMode->GetDisplayMode(), bmdFormat8BitYUV,
                                    bmdVideoInputEnableFormatDetection) != S_OK) {
+        LogDiagnostic(L"  EnableVideoInput (post-restart) failed");
         return E_FAIL;
     }
+    m_input->FlushStreams();
     if (m_input->StartStreams() != S_OK) {
+        LogDiagnostic(L"  StartStreams (post-restart) failed");
         return E_FAIL;
     }
     return S_OK;
@@ -232,7 +357,33 @@ HRESULT DeckLinkCaptureSource::VideoInputFrameArrived(
     if (!videoFrame) {
         return S_OK;
     }
+
+    // Diagnostic only (throttled to once/sec): if the DeckLink driver itself is holding
+    // a deep internal backlog of already-captured frames (rather than always handing us
+    // the newest one), this will show a large/growing count — which would explain a
+    // fixed multi-second preview delay despite our own TryGetLatestFrame being a
+    // zero-queue "always show the newest frame" overwrite that can't itself backlog.
+    {
+        const auto now = std::chrono::steady_clock::now();
+        if (now - m_lastQueueDepthLog > std::chrono::seconds(1)) {
+            m_lastQueueDepthLog = now;
+            unsigned int availableFrameCount = 0;
+            if (SUCCEEDED(m_input->GetAvailableVideoFrameCount(&availableFrameCount))) {
+                LogDiagnostic(L"DeckLinkCaptureSource: GetAvailableVideoFrameCount=" + std::to_wstring(availableFrameCount));
+            }
+        }
+    }
+
     if (videoFrame->GetFlags() & bmdFrameHasNoInputSource) {
+        // Throttled (once/sec) so a genuinely signal-less connector doesn't flood the
+        // log at the frame rate, while still proving frames ARE arriving (distinguishes
+        // "card enabled but nothing plugged into this connector" from "nothing is
+        // calling this callback at all").
+        const auto now = std::chrono::steady_clock::now();
+        if (now - m_lastNoSignalLog > std::chrono::seconds(1)) {
+            m_lastNoSignalLog = now;
+            LogDiagnostic(L"DeckLinkCaptureSource: frame arrived flagged bmdFrameHasNoInputSource");
+        }
         return S_OK; // card is enabled but no signal is present; nothing to copy yet
     }
 
@@ -261,6 +412,7 @@ HRESULT DeckLinkCaptureSource::VideoInputFrameArrived(
     const int32_t height = static_cast<int32_t>(videoFrame->GetHeight());
     const int32_t sourceStride = static_cast<int32_t>(videoFrame->GetRowBytes());
     const int32_t packedRowBytes = width * 4;
+    const BMDPixelFormat actualPixelFormat = videoFrame->GetPixelFormat();
 
     std::lock_guard<std::mutex> lock(m_frameMutex);
     if (m_width != width || m_height != height) {
@@ -269,17 +421,25 @@ HRESULT DeckLinkCaptureSource::VideoInputFrameArrived(
         m_height = height;
         m_strideBytes = packedRowBytes;
         m_latestFrameData.resize(static_cast<size_t>(packedRowBytes) * static_cast<size_t>(height));
+        LogDiagnostic(
+            L"DeckLinkCaptureSource: first/resized frame " + std::to_wstring(width) + L"x" +
+            std::to_wstring(height) + L", pixelFormat=0x" + [actualPixelFormat] {
+                std::wstringstream ss;
+                ss << std::hex << actualPixelFormat;
+                return ss.str();
+            }() +
+            L", sourceStride=" + std::to_wstring(sourceStride) + L" (expected width*2=" +
+            std::to_wstring(width * 2) + L")");
     }
 
+    // Source is native 8-bit YUV 4:2:2 (UYVY), 2 bytes/pixel — not BGRA32 — see the
+    // ConvertUyvyRowToBgra32 comment above for why this is requested instead of asking
+    // the card to convert on-board.
     const uint8_t* src = static_cast<const uint8_t*>(data);
-    if (sourceStride == packedRowBytes) {
-        std::memcpy(m_latestFrameData.data(), src, m_latestFrameData.size());
-    } else {
-        for (int32_t row = 0; row < height; ++row) {
-            std::memcpy(
-                m_latestFrameData.data() + static_cast<size_t>(row) * packedRowBytes,
-                src + static_cast<size_t>(row) * sourceStride, packedRowBytes);
-        }
+    for (int32_t row = 0; row < height; ++row) {
+        ConvertUyvyRowToBgra32(
+            src + static_cast<size_t>(row) * sourceStride,
+            m_latestFrameData.data() + static_cast<size_t>(row) * packedRowBytes, width);
     }
 
     m_hasFrame = true;

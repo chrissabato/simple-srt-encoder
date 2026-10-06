@@ -3,6 +3,7 @@
 #include "../ICaptureSource.h"
 
 #include <atomic>
+#include <chrono>
 #include <deque>
 #include <mutex>
 #include <vector>
@@ -15,9 +16,12 @@ namespace capturecore {
 //
 // Unlike UvcCaptureSource, this has no capture thread of its own: the DeckLink driver
 // invokes VideoInputFrameArrived() on its own internal thread whenever a frame is ready
-// (a push/callback model, not a pull loop). BGRA32 is requested directly from
-// EnableVideoInput — DeckLink hardware does that conversion on-card, so (unlike the UVC
-// YUY2/NV12 path) no software pixel conversion is needed here at all.
+// (a push/callback model, not a pull loop). Native 8-bit YUV 4:2:2 is requested from
+// EnableVideoInput (not BGRA32 — real hardware testing on a DeckLink Duo 2 sub-device in
+// its 4-independent-input profile showed on-card BGRA32 conversion silently never
+// locking despite the mode otherwise being correctly detected and nominally supported),
+// and converted to BGRA32 in software here — the same pattern already used by the UVC
+// YUY2/NV12 path, for the same underlying reason.
 //
 // Implements IDeckLinkInputCallback (and therefore IUnknown) by hand — deliberately not
 // using ATL's CComPtr/CComQIPtr (as Blackmagic's own samples do) to avoid depending on
@@ -66,6 +70,8 @@ private:
     std::vector<uint8_t> m_latestFrameData;
     int64_t m_latestTimestamp100ns = 0;
     bool m_hasFrame = false;
+    std::chrono::steady_clock::time_point m_lastNoSignalLog{};
+    std::chrono::steady_clock::time_point m_lastQueueDepthLog{};
 
     int32_t m_width = 0;
     int32_t m_height = 0;

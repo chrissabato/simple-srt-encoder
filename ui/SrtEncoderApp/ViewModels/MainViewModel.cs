@@ -347,8 +347,13 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     }
 
     private string? _openDeviceId;
+    // Serializes open/close calls into native code — OpenSource can block for several
+    // seconds (e.g. DeckLink's format-detection wait), and without this a second
+    // selection-changed event firing while that's still in flight would call into the
+    // same native CaptureManager handle from two threads at once.
+    private readonly SemaphoreSlim _deviceOpenLock = new(1, 1);
 
-    public bool OpenSelectedDevice()
+    public async Task<bool> OpenSelectedDeviceAsync()
     {
         if (SelectedDevice is null)
         {
@@ -365,14 +370,42 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             return true;
         }
 
-        _captureCore.CloseSource();
-        var opened = _captureCore.OpenSource(SelectedDevice, (int)OutputWidth, (int)OutputHeight, 30, 1);
-        IsDeviceOpen = opened;
-        _openDeviceId = opened ? SelectedDevice.DeviceId : null;
-        StatusText = opened
-            ? $"Opened {SelectedDevice.DisplayName} at {_captureCore.OpenWidth}x{_captureCore.OpenHeight}."
-            : $"Failed to open {SelectedDevice.DisplayName}.";
-        return opened;
+        var device = SelectedDevice;
+        StatusText = $"Connecting to {device.DisplayName}...";
+
+        await _deviceOpenLock.WaitAsync();
+        try
+        {
+            // OpenSource (and the CloseSource before it) are blocking native calls — a
+            // DeckLink device in particular can take several real seconds (format
+            // detection + relock) before returning. Run them off the UI thread so the
+            // whole app doesn't freeze for that whole window.
+            var (opened, openWidth, openHeight) = await Task.Run(() =>
+            {
+                _captureCore.CloseSource();
+                var ok = _captureCore.OpenSource(device, (int)OutputWidth, (int)OutputHeight, 30, 1);
+                return (ok, _captureCore.OpenWidth, _captureCore.OpenHeight);
+            });
+
+            // The user may have picked a different device while this was in flight —
+            // don't let a slow, now-stale open overwrite the status/state of whatever
+            // is actually selected now.
+            if (!ReferenceEquals(SelectedDevice, device) && SelectedDevice?.DeviceId != device.DeviceId)
+            {
+                return opened;
+            }
+
+            IsDeviceOpen = opened;
+            _openDeviceId = opened ? device.DeviceId : null;
+            StatusText = opened
+                ? $"Opened {device.DisplayName} at {openWidth}x{openHeight}."
+                : $"Failed to open {device.DisplayName}.";
+            return opened;
+        }
+        finally
+        {
+            _deviceOpenLock.Release();
+        }
     }
 
     public void CloseDevice()

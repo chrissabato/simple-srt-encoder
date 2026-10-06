@@ -140,11 +140,11 @@ public sealed partial class MainPage : Page
 
     private void DeviceComboBox_DropDownOpened(object sender, object e) => ViewModel.RefreshDevices();
 
-    private void DeviceComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private async void DeviceComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (ViewModel.SelectedDevice is not null)
         {
-            ViewModel.OpenSelectedDevice();
+            await ViewModel.OpenSelectedDeviceAsync();
         }
     }
 
