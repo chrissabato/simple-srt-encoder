@@ -73,7 +73,12 @@ param(
 
     [string]$RepoUrl,
 
-    [string]$GithubToken = $env:GITHUB_TOKEN,
+    # $null (not passed) picks up $env:GITHUB_TOKEN below, AFTER .env has been loaded —
+    # evaluating `$env:GITHUB_TOKEN` directly as the parameter default here would run at
+    # parameter-binding time, before the .env-loading code further down ever executes,
+    # so a token placed only in .env (not already in the process environment) would be
+    # silently ignored.
+    [string]$GithubToken = $null,
 
     [switch]$Publish,
 
@@ -102,6 +107,10 @@ if (Test-Path $envFile) {
             [System.Environment]::SetEnvironmentVariable($key, $value.Trim())
         }
     }
+}
+
+if (-not $GithubToken) {
+    $GithubToken = $env:GITHUB_TOKEN
 }
 
 if (-not (Get-Command vpk -ErrorAction SilentlyContinue)) {
