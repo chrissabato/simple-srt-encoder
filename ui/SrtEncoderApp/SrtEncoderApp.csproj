@@ -98,8 +98,20 @@
   <PropertyGroup>
     <PublishReadyToRun Condition="'$(Configuration)' == 'Debug'">False</PublishReadyToRun>
     <PublishReadyToRun Condition="'$(Configuration)' != 'Debug'">True</PublishReadyToRun>
-    <PublishTrimmed Condition="'$(Configuration)' == 'Debug'">False</PublishTrimmed>
-    <PublishTrimmed Condition="'$(Configuration)' != 'Debug'">True</PublishTrimmed>
+    <!-- Trimming disabled: real-hardware testing (2026-10-07) hit a cascading series of
+         MissingMethodExceptions from System.Text.Json at runtime on a trimmed +
+         WindowsAppSDKSelfContained Release publish — first the built-in
+         DateTimeOffsetConverter, then a Utf8JsonWriter method, even after switching to a
+         source-generated JsonSerializerContext (supposed to be the trim-safe path) and
+         routing it through JsonSerializerOptions.TypeInfoResolver. Each fix just
+         surfaced the next missing method rather than converging, indicating a systemic
+         incompatibility between the trimmer and System.Text.Json in this specific
+         self-contained WindowsAppSDK configuration, not an isolated gap. This is a
+         single-user desktop utility, not something where trimmed binary size matters
+         enough to justify that fragility — disabling it restores plain, reliable
+         reflection-based JSON (see PresetService.cs) at the cost of a larger published
+         size. -->
+    <PublishTrimmed>False</PublishTrimmed>
   </PropertyGroup>
 
   <!--

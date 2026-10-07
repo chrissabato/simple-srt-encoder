@@ -3,7 +3,9 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstring>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <thread>
@@ -107,17 +109,37 @@ DeckLinkCaptureSource::DeckLinkCaptureSource(ComPtr<IDeckLinkInput> input, const
         throw std::runtime_error("GetDisplayModeIterator failed");
     }
 
+    const double requestedFps = requestedFormat.frameRate.denominator > 0
+        ? static_cast<double>(requestedFormat.frameRate.numerator) / requestedFormat.frameRate.denominator
+        : 0.0;
     LogDiagnostic(
         L"  requested format: " + std::to_wstring(requestedFormat.width) + L"x" +
-        std::to_wstring(requestedFormat.height));
+        std::to_wstring(requestedFormat.height) + L" @" + std::to_wstring(requestedFps) + L"fps");
 
+    // Picking the FIRST mode that merely matches width/height (ignoring frame rate
+    // entirely) was a real bug: on a card with no auto format-detection to correct a
+    // wrong guess afterward (e.g. a DeckLink Mini Recorder HD — unlike the DeckLink Duo
+    // 2 this was originally written against), a 1920x1080 request could permanently
+    // lock onto something like 1080p23.98 — the first same-size mode this SDK happens to
+    // enumerate — while the real source is actually 1080p59.94, and just sit waiting for
+    // a signal that will never arrive. Now scores every same-size mode by closeness to
+    // the requested frame rate and keeps the best one, so the caller's requested fps
+    // (CcCaptureFormat.frameRate, plumbed from the UI's "Output frame rate" field) is
+    // actually honored instead of being silently ignored.
     BMDDisplayMode chosenMode = bmdModeUnknown;
     BMDDisplayMode firstMode = bmdModeUnknown;
+    double bestFrameRateDiff = (std::numeric_limits<double>::max)();
     ComPtr<IDeckLinkDisplayMode> displayMode;
     while (modeIterator->Next(&displayMode) == S_OK) {
         const BMDDisplayMode mode = displayMode->GetDisplayMode();
         const int32_t width = static_cast<int32_t>(displayMode->GetWidth());
         const int32_t height = static_cast<int32_t>(displayMode->GetHeight());
+        BMDTimeValue frameDuration = 0;
+        BMDTimeScale timeScale = 0;
+        double fps = 0.0;
+        if (SUCCEEDED(displayMode->GetFrameRate(&frameDuration, &timeScale)) && frameDuration > 0) {
+            fps = static_cast<double>(timeScale) / static_cast<double>(frameDuration);
+        }
         BSTR modeName = nullptr;
         std::wstring modeNameStr;
         if (SUCCEEDED(displayMode->GetName(&modeName)) && modeName) {
@@ -125,19 +147,21 @@ DeckLinkCaptureSource::DeckLinkCaptureSource(ComPtr<IDeckLinkInput> input, const
             SysFreeString(modeName);
         }
         LogDiagnostic(
-            L"    mode: " + std::to_wstring(width) + L"x" + std::to_wstring(height) + L" (" + modeNameStr + L")");
+            L"    mode: " + std::to_wstring(width) + L"x" + std::to_wstring(height) + L" @" + std::to_wstring(fps) +
+            L"fps (" + modeNameStr + L")");
 
         if (firstMode == bmdModeUnknown) {
             firstMode = mode;
         }
         if (requestedFormat.width > 0 && requestedFormat.height > 0 && width == requestedFormat.width &&
             height == requestedFormat.height) {
-            chosenMode = mode;
+            const double diff = requestedFps > 0.0 ? std::abs(fps - requestedFps) : 0.0;
+            if (chosenMode == bmdModeUnknown || diff < bestFrameRateDiff) {
+                chosenMode = mode;
+                bestFrameRateDiff = diff;
+            }
         }
         displayMode.Reset();
-        if (chosenMode != bmdModeUnknown) {
-            break;
-        }
     }
     if (chosenMode == bmdModeUnknown) {
         chosenMode = firstMode;
@@ -393,19 +417,70 @@ HRESULT DeckLinkCaptureSource::VideoInputFrameArrived(
     // IDeckLinkVideoInputFrame from EnableVideoInput without GPUDirect is host memory
     // for the whole callback's duration regardless, but the StartAccess/EndAccess calls
     // are still required to get a valid pointer out of GetBytes.
+    //
+    // Real hardware testing against a DeckLink Mini Recorder HD on Desktop Video 15.0
+    // (pre-16.0; see the IDeckLinkInput_v15_3_1 fallback comment in
+    // DeckLinkDeviceEnumerator.cpp for the full story) found QueryInterface for the
+    // CURRENT IDeckLinkVideoBuffer fails for every frame that driver delivers — not
+    // because the buffer-object split doesn't exist yet on this driver (it does — see
+    // below), but because IDeckLinkVideoBuffer ITSELF changed shape again between 15.3.1
+    // and 16.0 (16.0 inserted a GetSize method between GetBytes and StartAccess,
+    // shifting every slot after it). IDeckLinkVideoBuffer_v15_3_1 is the frozen shape
+    // this driver generation actually implements (confirmed empirically — the IDL even
+    // predates adding GetSize). GetWidth/Height/RowBytes/PixelFormat/Flags on the frame
+    // object itself are unaffected by any of this (unchanged across every version,
+    // confirmed against the generated header), so only the buffer-access path needs a
+    // fallback. IDeckLinkVideoFrame_v14_2_1 (GetBytes living directly on the frame, no
+    // separate buffer object at all — the pre-buffer-split shape) is kept as a second,
+    // older fallback for drivers from before the split existed at all; it isn't what
+    // this specific driver needed, but costs nothing to keep trying.
     ComPtr<IDeckLinkVideoBuffer> videoBuffer;
-    if (FAILED(videoFrame->QueryInterface(
-            IID_IDeckLinkVideoBuffer, reinterpret_cast<void**>(videoBuffer.GetAddressOf())))) {
-        return S_OK;
-    }
-    if (FAILED(videoBuffer->StartAccess(bmdBufferAccessRead))) {
-        return S_OK;
-    }
+    ComPtr<IDeckLinkVideoBuffer_v15_3_1> videoBufferV1531;
+    ComPtr<IDeckLinkVideoFrame_v14_2_1> legacyFrame;
     void* data = nullptr;
-    const HRESULT getBytesResult = videoBuffer->GetBytes(&data);
-    if (FAILED(getBytesResult) || !data) {
-        videoBuffer->EndAccess(bmdBufferAccessRead);
-        return S_OK;
+    const HRESULT bufferQiResult =
+        videoFrame->QueryInterface(IID_IDeckLinkVideoBuffer, reinterpret_cast<void**>(videoBuffer.GetAddressOf()));
+    const HRESULT bufferV1531QiResult = SUCCEEDED(bufferQiResult)
+        ? S_OK
+        : videoFrame->QueryInterface(
+              IID_IDeckLinkVideoBuffer_v15_3_1, reinterpret_cast<void**>(videoBufferV1531.GetAddressOf()));
+    if (SUCCEEDED(bufferQiResult)) {
+        if (FAILED(videoBuffer->StartAccess(bmdBufferAccessRead))) {
+            LogDiagnostic(L"DeckLinkCaptureSource: IDeckLinkVideoBuffer::StartAccess failed");
+            return S_OK;
+        }
+        if (FAILED(videoBuffer->GetBytes(&data)) || !data) {
+            LogDiagnostic(L"DeckLinkCaptureSource: IDeckLinkVideoBuffer::GetBytes failed");
+            videoBuffer->EndAccess(bmdBufferAccessRead);
+            return S_OK;
+        }
+    } else if (SUCCEEDED(bufferV1531QiResult)) {
+        if (FAILED(videoBufferV1531->StartAccess(bmdBufferAccessRead))) {
+            LogDiagnostic(L"DeckLinkCaptureSource: IDeckLinkVideoBuffer_v15_3_1::StartAccess failed");
+            return S_OK;
+        }
+        if (FAILED(videoBufferV1531->GetBytes(&data)) || !data) {
+            LogDiagnostic(L"DeckLinkCaptureSource: IDeckLinkVideoBuffer_v15_3_1::GetBytes failed");
+            videoBufferV1531->EndAccess(bmdBufferAccessRead);
+            return S_OK;
+        }
+    } else {
+        const HRESULT legacyQiResult = videoFrame->QueryInterface(
+            IID_IDeckLinkVideoFrame_v14_2_1, reinterpret_cast<void**>(legacyFrame.GetAddressOf()));
+        if (SUCCEEDED(legacyQiResult)) {
+            if (FAILED(legacyFrame->GetBytes(&data)) || !data) {
+                LogDiagnostic(L"DeckLinkCaptureSource: IDeckLinkVideoFrame_v14_2_1::GetBytes failed");
+                return S_OK;
+            }
+        } else {
+            std::wstringstream ss;
+            ss << L"DeckLinkCaptureSource: could not get pixel data — QI(IDeckLinkVideoBuffer) hr=0x" << std::hex
+               << static_cast<unsigned long>(bufferQiResult) << L", QI(IDeckLinkVideoBuffer_v15_3_1) hr=0x"
+               << static_cast<unsigned long>(bufferV1531QiResult) << L", QI(IDeckLinkVideoFrame_v14_2_1) hr=0x"
+               << static_cast<unsigned long>(legacyQiResult);
+            LogDiagnostic(ss.str());
+            return S_OK;
+        }
     }
 
     const int32_t width = static_cast<int32_t>(videoFrame->GetWidth());
@@ -448,7 +523,11 @@ HRESULT DeckLinkCaptureSource::VideoInputFrameArrived(
     // callers), not scheduled by original PTS, so this isn't needed for correctness.
     m_latestTimestamp100ns = 0;
 
-    videoBuffer->EndAccess(bmdBufferAccessRead);
+    if (videoBuffer) {
+        videoBuffer->EndAccess(bmdBufferAccessRead);
+    } else if (videoBufferV1531) {
+        videoBufferV1531->EndAccess(bmdBufferAccessRead);
+    }
     return S_OK;
 }
 

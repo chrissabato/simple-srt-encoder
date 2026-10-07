@@ -176,8 +176,59 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private double _outputHeight = 1080;
     public double OutputHeight { get => _outputHeight; set => SetProperty(ref _outputHeight, value); }
 
-    private double _outputFrameRate = 30;
+    // 59.94 (not a round 30/60) default because a mistyped/free-typed frame rate (the
+    // "Output frame rate" NumberBox previously let this become e.g. 64 by accident)
+    // silently picks the wrong DeckLink display mode with no auto-detection to correct
+    // it on cards that don't support format detection — real hardware testing hit
+    // exactly this, and 59.94 is the most common broadcast source rate.
+    //
+    // A dropdown constraining input to FrameRateOptions below (instead of free text
+    // entry) was attempted the same day but reverted: x:Bind Mode=TwoWay on
+    // ComboBox.SelectedItem against this double property crashed the app on launch
+    // (0xc000027b) on the real test machine. A future attempt should populate/read the
+    // ComboBox manually in code-behind (MainPage.xaml.cs) instead of through x:Bind, per
+    // the pattern already used for DeviceComboBox.
+    private double _outputFrameRate = 59.94;
     public double OutputFrameRate { get => _outputFrameRate; set => SetProperty(ref _outputFrameRate, value); }
+
+    // Canonical broadcast frame rates — used by SnapToFrameRateOption below (and ready
+    // to back a future frame-rate dropdown; see the comment on OutputFrameRate's default
+    // for why that doesn't exist yet).
+    public IReadOnlyList<double> FrameRateOptions { get; } = new[] { 23.976, 24.0, 25.0, 29.97, 30.0, 50.0, 59.94, 60.0 };
+
+    // Snaps a computed fps (e.g. from a preset's stored numerator/denominator, which for
+    // a drop-frame rate like 60000/1001 divides out to 59.9400599... not exactly 59.94)
+    // to the matching FrameRateOptions entry, keeping OutputFrameRate on one of our
+    // canonical values so ToFrameRateRational below maps it back to the exact same
+    // rational it came from, rather than losing drop-frame precision on a round trip.
+    private double SnapToFrameRateOption(double fps)
+    {
+        foreach (var option in FrameRateOptions)
+        {
+            if (Math.Abs(option - fps) < 0.01)
+            {
+                return option;
+            }
+        }
+        return FrameRateOptions.OrderBy(o => Math.Abs(o - fps)).First();
+    }
+
+    // Converts a UI-facing fps value to the (numerator, denominator) pair CaptureCore's
+    // device-open negotiation expects. Recognizes the common NTSC drop-frame rates
+    // (23.976/29.97/59.94, each commonly entered/displayed as the rounded 24/30/60) as
+    // their exact broadcast rationals (24000/1001 etc.) rather than truncating them to a
+    // plain whole-number/1 rate — real DeckLink hardware (e.g. a source genuinely
+    // outputting 1080p59.94) needs the real rational to match against the card's
+    // enumerated display modes correctly, not just a close integer approximation.
+    private static (int Numerator, int Denominator) ToFrameRateRational(double fps)
+    {
+        const double epsilon = 0.01;
+        if (Math.Abs(fps - 23.976) < epsilon) return (24000, 1001);
+        if (Math.Abs(fps - 29.97) < epsilon) return (30000, 1001);
+        if (Math.Abs(fps - 59.94) < epsilon) return (60000, 1001);
+        if (Math.Abs(fps - 119.88) < epsilon) return (120000, 1001);
+        return (Math.Max(1, (int)Math.Round(fps)), 1);
+    }
 
     private bool _audioEnabled;
     public bool AudioEnabled
@@ -380,10 +431,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             // DeckLink device in particular can take several real seconds (format
             // detection + relock) before returning. Run them off the UI thread so the
             // whole app doesn't freeze for that whole window.
+            var (frameRateNumerator, frameRateDenominator) = ToFrameRateRational(OutputFrameRate);
             var (opened, openWidth, openHeight) = await Task.Run(() =>
             {
                 _captureCore.CloseSource();
-                var ok = _captureCore.OpenSource(device, (int)OutputWidth, (int)OutputHeight, 30, 1);
+                var ok = _captureCore.OpenSource(
+                    device, (int)OutputWidth, (int)OutputHeight, frameRateNumerator, frameRateDenominator);
                 return (ok, _captureCore.OpenWidth, _captureCore.OpenHeight);
             });
 
@@ -505,33 +558,48 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     // SaveAsPreset), which is why it doesn't need to round-trip through the UI at all.
     public void ApplyPreset(Preset preset)
     {
-        // Device selection: match by DeviceId if the device is currently enumerated,
-        // otherwise leave SelectedDevice unset (device may be unplugged).
-        SelectedDevice = Devices.FirstOrDefault(d => d.DeviceId == preset.Source.DeviceId);
+        // This runs directly off a XAML ListView/ComboBox SelectionChanged event (a WinRT
+        // call boundary) — an exception escaping it uncaught fails fast with 0xc000027b
+        // instead of surfacing as a normal catchable .NET exception (same class of crash
+        // documented elsewhere in this project, and the same fix already applied to
+        // SaveAsPreset below after a real "saving a preset crashes the app" report).
+        // Confirmed as a real, not just theoretical, risk here too: loading a preset
+        // crashed instead of showing an error.
+        try
+        {
+            // Device selection: match by DeviceId if the device is currently enumerated,
+            // otherwise leave SelectedDevice unset (device may be unplugged).
+            SelectedDevice = Devices.FirstOrDefault(d => d.DeviceId == preset.Source.DeviceId);
 
-        EncoderImpl = preset.Encode.EncoderImpl;
-        RateControl = preset.Encode.RateControl;
-        BitrateKbps = preset.Encode.BitrateKbps;
-        MaxBitrateKbps = preset.Encode.MaxBitrateKbps;
-        BufferSizeKbps = preset.Encode.BufferSizeKbps;
-        KeyframeIntervalSec = preset.Encode.KeyframeIntervalSec;
-        X264Preset = preset.Encode.X264Preset;
-        OutputWidth = preset.Encode.OutputWidth;
-        OutputHeight = preset.Encode.OutputHeight;
-        OutputFrameRate = preset.Encode.OutputFrameRateNumerator / (double)Math.Max(1, preset.Encode.OutputFrameRateDenominator);
+            EncoderImpl = preset.Encode.EncoderImpl;
+            RateControl = preset.Encode.RateControl;
+            BitrateKbps = preset.Encode.BitrateKbps;
+            MaxBitrateKbps = preset.Encode.MaxBitrateKbps;
+            BufferSizeKbps = preset.Encode.BufferSizeKbps;
+            KeyframeIntervalSec = preset.Encode.KeyframeIntervalSec;
+            X264Preset = preset.Encode.X264Preset;
+            OutputWidth = preset.Encode.OutputWidth;
+            OutputHeight = preset.Encode.OutputHeight;
+            OutputFrameRate = SnapToFrameRateOption(
+                preset.Encode.OutputFrameRateNumerator / (double)Math.Max(1, preset.Encode.OutputFrameRateDenominator));
 
-        AudioEnabled = preset.Encode.AudioEnabled;
-        AudioBitrateKbps = preset.Encode.AudioBitrateKbps;
-        // Match by DeviceId if currently enumerated, otherwise leave unset (device may
-        // be unplugged) — same convention as the video SelectedDevice match above.
-        SelectedAudioDevice = AudioDevices.FirstOrDefault(d => d.DeviceId == preset.Encode.AudioDeviceId);
+            AudioEnabled = preset.Encode.AudioEnabled;
+            AudioBitrateKbps = preset.Encode.AudioBitrateKbps;
+            // Match by DeviceId if currently enumerated, otherwise leave unset (device may
+            // be unplugged) — same convention as the video SelectedDevice match above.
+            SelectedAudioDevice = AudioDevices.FirstOrDefault(d => d.DeviceId == preset.Encode.AudioDeviceId);
 
-        SrtMode = preset.Srt.Mode;
-        Host = preset.Srt.Host;
-        Port = preset.Srt.Port;
-        LatencyMs = preset.Srt.LatencyMs;
-        PbKeyLen = preset.Srt.PbKeyLen;
-        StreamId = preset.Srt.StreamId;
+            SrtMode = preset.Srt.Mode;
+            Host = preset.Srt.Host;
+            Port = preset.Srt.Port;
+            LatencyMs = preset.Srt.LatencyMs;
+            PbKeyLen = preset.Srt.PbKeyLen;
+            StreamId = preset.Srt.StreamId;
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Could not load preset \"{preset.Name}\": {ex.GetType().Name}: {ex.Message}";
+        }
     }
 
     // Clears the current selection so the Presets section starts a fresh, unnamed
@@ -570,7 +638,24 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             preset.Srt.PassphraseProtected = PresetService.ProtectPassphrase(plaintextPassphrase);
         }
 
-        _presets.Save(preset);
+        try
+        {
+            _presets.Save(preset);
+        }
+        catch (Exception ex)
+        {
+            // This handler runs directly off a XAML button-click event (a WinRT call
+            // boundary) — an exception escaping it uncaught doesn't surface as a normal
+            // catchable .NET exception, it fails fast with 0xc000027b instead (the same
+            // class of crash already documented elsewhere in this project for native
+            // calls crossing this same kind of boundary). Confirmed as a real, not
+            // theoretical, crash: saving a preset on a machine with a different/missing
+            // write permission or disk state crashed the whole app instead of showing an
+            // error.
+            StatusText = $"Could not save preset \"{name}\": {ex.GetType().Name}: {ex.Message}";
+            return false;
+        }
+
         var wasUpdate = existingId is not null;
         RefreshPresets();
         SelectedPreset = Presets.FirstOrDefault(p => p.Id == preset.Id);

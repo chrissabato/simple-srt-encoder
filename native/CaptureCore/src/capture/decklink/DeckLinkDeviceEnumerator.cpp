@@ -15,29 +15,77 @@ namespace {
 
 // A DeckLink device has no symbolic-link-style identifier the way Media Foundation
 // devices do; BMDDeckLinkPersistentID is the SDK's own documented stable identifier
-// for a physical device across enumerations, so it's used as the opaque CcDeviceId.
+// for a physical device across enumerations, so it's preferred as the opaque CcDeviceId
+// when available. Real hardware testing found it's NOT always available, though (see
+// MakeFallbackDeviceId below) — don't assume every DeckLink device reports one.
 std::wstring MakeDeviceId(int64_t persistentId) {
     std::wstringstream ss;
     ss << L"decklink:" << std::hex << persistentId;
     return ss.str();
 }
 
-bool TryGetInputAndPersistentId(IDeckLink* deckLink, ComPtr<IDeckLinkInput>& outInput, int64_t& outPersistentId) {
-    ComPtr<IDeckLink> device(deckLink);
+// Fallback identifier keyed on enumeration order, used when BMDDeckLinkPersistentID
+// isn't available (see the comment on hasPersistentId below) — stable enough across an
+// Enumerate() and a subsequent Open() since both do a fresh CoCreateInstance +
+// IDeckLinkIterator walk in the same hardware-topology order each time, the same
+// assumption the persistent-ID path already implicitly relies on.
+std::wstring MakeFallbackDeviceId(int32_t subDeviceIndex) {
+    return L"decklink:idx" + std::to_wstring(subDeviceIndex);
+}
 
-    if (FAILED(device.As(&outInput))) {
-        return false; // output-only device or a sub-device with no input on this profile
+// outPersistentId/outHasPersistentId are only meaningful when this returns true.
+bool TryGetInput(IDeckLink* deckLink, ComPtr<IDeckLinkInput>& outInput) {
+    ComPtr<IDeckLink> device(deckLink);
+    if (SUCCEEDED(device.As(&outInput))) {
+        return true;
     }
 
+    // Fallback for older installed Desktop Video drivers: confirmed on a real DeckLink
+    // Mini Recorder HD running Desktop Video 15.0, while this repo's bundled SDK (see
+    // DeckLinkAPIVersion.h) is from SDK 16.0 — the *current* IID_IDeckLinkInput this QFI
+    // requests above isn't implemented by that older driver at all (QueryInterface just
+    // fails outright; it's a version mismatch, not an "output-only device" the earlier,
+    // less specific error message implied). SDK 16.0 still ships the exact interface
+    // shape frozen at SDK 15.3.1 for this (IDeckLinkInput_v15_3_1) — verified by
+    // comparing both generated headers line-for-line that every method this project
+    // actually calls (GetDisplayModeIterator, EnableVideoInput, EnableAudioInput,
+    // DisableAudioInput, Start/Stop/Pause/FlushStreams, SetCallback,
+    // GetAvailableVideoFrameCount, DisableVideoInput) has an identical vtable slot and
+    // signature in both versions, AND that v15.3.1's SetCallback already takes today's
+    // unversioned IDeckLinkInputCallback* directly (the callback interface itself was
+    // last changed exactly at 15.3.1) — so DeckLinkCaptureSource needs no changes to work
+    // against either generation through this same ComPtr<IDeckLinkInput>. Deliberately
+    // does NOT fall back further than this: older generations (_v14_2_1 and earlier)
+    // changed the callback interface's VideoInputFrameArrived parameter type too, which
+    // would need a real adapter, not just a different QueryInterface call.
+    if (SUCCEEDED(device->QueryInterface(
+            IID_IDeckLinkInput_v15_3_1, reinterpret_cast<void**>(outInput.ReleaseAndGetAddressOf())))) {
+        LogDiagnostic(
+            L"DeckLinkDeviceEnumerator: device only implements IDeckLinkInput_v15_3_1, not the current SDK "
+            L"16.0 IDeckLinkInput — falling back to it (older Desktop Video driver installed)");
+        return true;
+    }
+
+    return false; // output-only device, no input on this profile, or an even older driver
+}
+
+// Real hardware testing found a DeckLink Mini Recorder HD (a genuinely input-only
+// product — there's no ambiguity about whether it "has input") returning a
+// BMDDeckLinkPersistentID of 0 / failing the attribute query entirely, apparently
+// depending on the Desktop Video driver version — unlike the DeckLink Duo 2 this was
+// originally tested against, where every sub-device reported a real non-zero ID. This
+// single device's real identity doesn't need distinguishing from any other
+// (BMDDeckLinkPersistentID only matters for telling multiple sub-devices apart in the
+// first place), so treating "no persistent ID" as "not an input device" was wrong — it
+// silently excluded a perfectly good, genuinely input-capable device from the list.
+bool TryGetPersistentId(IDeckLink* deckLink, int64_t& outPersistentId) {
+    ComPtr<IDeckLink> device(deckLink);
     ComPtr<IDeckLinkProfileAttributes> attributes;
     if (FAILED(device.As(&attributes))) {
         return false;
     }
     outPersistentId = 0;
-    if (FAILED(attributes->GetInt(BMDDeckLinkPersistentID, &outPersistentId)) || outPersistentId == 0) {
-        return false;
-    }
-    return true;
+    return SUCCEEDED(attributes->GetInt(BMDDeckLinkPersistentID, &outPersistentId)) && outPersistentId != 0;
 }
 
 } // namespace
@@ -94,20 +142,27 @@ std::vector<CcDeviceInfo> DeckLinkDeviceEnumerator::Enumerate() {
         }
 
         ComPtr<IDeckLinkInput> input;
-        int64_t persistentId = 0;
-        const bool hasInput = TryGetInputAndPersistentId(deckLink.Get(), input, persistentId);
-        LogDiagnostic(
-            L"DeckLinkDeviceEnumerator::Enumerate: sub-device " + std::to_wstring(subDeviceIndex) + L" (" +
-            displayName + L") " + (hasInput ? L"has input, persistentId=" + MakeDeviceId(persistentId)
-                                             : L"has NO input on this profile (output-only, or GetInt(BMDDeckLinkPersistentID) failed)"));
-        ++subDeviceIndex;
+        const bool hasInput = TryGetInput(deckLink.Get(), input);
         if (!hasInput) {
+            LogDiagnostic(
+                L"DeckLinkDeviceEnumerator::Enumerate: sub-device " + std::to_wstring(subDeviceIndex) + L" (" +
+                displayName + L") has NO input on this profile (output-only device)");
+            ++subDeviceIndex;
             continue;
         }
 
+        int64_t persistentId = 0;
+        const bool hasPersistentId = TryGetPersistentId(deckLink.Get(), persistentId);
+        const std::wstring deviceId = hasPersistentId ? MakeDeviceId(persistentId) : MakeFallbackDeviceId(subDeviceIndex);
+        LogDiagnostic(
+            L"DeckLinkDeviceEnumerator::Enumerate: sub-device " + std::to_wstring(subDeviceIndex) + L" (" +
+            displayName + L") has input, id=" + deviceId +
+            (hasPersistentId ? L"" : L" (no BMDDeckLinkPersistentID reported — using enumeration-order fallback)"));
+        ++subDeviceIndex;
+
         CcDeviceInfo info{};
         info.backend = CcBackendType::DeckLink;
-        wcsncpy_s(info.id.value, CC_MAX_STRING, MakeDeviceId(persistentId).c_str(), _TRUNCATE);
+        wcsncpy_s(info.id.value, CC_MAX_STRING, deviceId.c_str(), _TRUNCATE);
         wcsncpy_s(info.displayName, CC_MAX_STRING, displayName.c_str(), _TRUNCATE);
         devices.push_back(info);
     }
@@ -126,18 +181,24 @@ std::unique_ptr<ICaptureSource> DeckLinkDeviceEnumerator::Open(const CcDeviceId&
         return nullptr;
     }
 
+    int32_t subDeviceIndex = 0;
     IDeckLink* rawDeckLink = nullptr;
     while (iterator->Next(&rawDeckLink) == S_OK) {
         ComPtr<IDeckLink> deckLink;
         deckLink.Attach(rawDeckLink);
 
         ComPtr<IDeckLinkInput> input;
-        int64_t persistentId = 0;
-        if (!TryGetInputAndPersistentId(deckLink.Get(), input, persistentId)) {
+        if (!TryGetInput(deckLink.Get(), input)) {
+            ++subDeviceIndex;
             continue;
         }
 
-        if (MakeDeviceId(persistentId) != id.value) {
+        int64_t persistentId = 0;
+        const bool hasPersistentId = TryGetPersistentId(deckLink.Get(), persistentId);
+        const std::wstring deviceId = hasPersistentId ? MakeDeviceId(persistentId) : MakeFallbackDeviceId(subDeviceIndex);
+        ++subDeviceIndex;
+
+        if (deviceId != id.value) {
             continue;
         }
 

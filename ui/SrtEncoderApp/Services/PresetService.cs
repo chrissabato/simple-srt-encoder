@@ -9,6 +9,12 @@ namespace SrtEncoderApp.Services;
 /// Loads/saves Preset JSON files under %LOCALAPPDATA%\SrtEncoder\Presets. Preset schema
 /// and persistence live entirely here in C# — the native ABI only ever sees plain
 /// capture/encode/SRT setting structs, so this schema can evolve independently.
+///
+/// Plain reflection-based JsonSerializer.Serialize/Deserialize&lt;Preset&gt; — a
+/// source-generated JsonSerializerContext was tried on 2026-10-07 to support this app's
+/// trimmed Release publish, but trimming itself turned out to be the real problem (see
+/// SrtEncoderApp.csproj's PublishTrimmed comment) and has been disabled, so the
+/// source-gen workaround is no longer needed.
 /// </summary>
 internal sealed class PresetService
 {
@@ -48,7 +54,7 @@ internal sealed class PresetService
 
     public void Save(Preset preset)
     {
-        preset.ModifiedUtc = DateTimeOffset.UtcNow;
+        preset.ModifiedUtc = DateTime.UtcNow;
         File.WriteAllText(GetPath(preset.Id), JsonSerializer.Serialize(preset, JsonOptions));
     }
 

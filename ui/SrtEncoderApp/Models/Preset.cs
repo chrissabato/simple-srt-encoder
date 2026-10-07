@@ -4,14 +4,22 @@ namespace SrtEncoderApp.Models;
 /// Persisted as JSON at %LOCALAPPDATA%\SrtEncoder\Presets\&lt;Id&gt;.json (see
 /// Services/PresetService.cs). SchemaVersion exists so a future field rename/removal can
 /// migrate old files on load instead of breaking them.
+///
+/// CreatedUtc/ModifiedUtc are DateTime (not DateTimeOffset) deliberately: real testing
+/// on this app's self-contained trimmed build hit a MissingMethodException from
+/// System.Text.Json's source-generated (de)serializer specifically for
+/// JsonMetadataServices.DateTimeOffsetConverter — the trimmer strips that built-in
+/// converter helper out of the bundled System.Text.Json.dll even with a
+/// JsonSerializerContext in use (see PresetService.cs). DateTime's converter wasn't
+/// affected.
 /// </summary>
 public sealed class Preset
 {
     public int SchemaVersion { get; set; } = 1;
     public string Id { get; set; } = Guid.NewGuid().ToString();
     public string Name { get; set; } = "New Preset";
-    public DateTimeOffset CreatedUtc { get; set; } = DateTimeOffset.UtcNow;
-    public DateTimeOffset ModifiedUtc { get; set; } = DateTimeOffset.UtcNow;
+    public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
+    public DateTime ModifiedUtc { get; set; } = DateTime.UtcNow;
 
     public PresetSource Source { get; set; } = new();
     public PresetEncode Encode { get; set; } = new();
