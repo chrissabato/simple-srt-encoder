@@ -68,32 +68,36 @@ const YuvToBgrTables& GetYuvToBgrTables() {
     return tables;
 }
 
-void YuvToBgr(int y, int u, int v, uint8_t& b, uint8_t& g, uint8_t& r) {
-    const YuvToBgrTables& t = GetYuvToBgrTables();
-    const int yTerm = t.y[y];
-    r = ClampToByte((yTerm + t.vToR[v] + 128) >> 8);
-    g = ClampToByte((yTerm + t.uToG[u] + t.vToG[v] + 128) >> 8);
-    b = ClampToByte((yTerm + t.uToB[u] + 128) >> 8);
-}
-
-void ConvertUyvyRowToBgra32(const uint8_t* srcRow, uint8_t* dstRow, int32_t width) {
+// Confirmed via direct timing (2026-10-07, live DeckLink 1080p59.94 test — see
+// VideoInputFrameArrived) that the previous per-sample YuvToBgr() helper, called twice
+// per pixel pair, was redundantly recomputing the SAME four chroma-table lookups
+// (uToB[u]/uToG[u]/vToR[v]/vToG[v]) twice — once for each of the pair's two luma
+// samples — even though U/V are shared by both samples in 4:2:2. Also hoisted
+// GetYuvToBgrTables() out of the per-pixel path entirely (now looked up once per row,
+// not twice per pixel pair / ~4M times per 1080p frame). Pure algebraic
+// simplification — same inputs produce bit-identical outputs, not a behavior change.
+void ConvertUyvyRowToBgra32(const YuvToBgrTables& t, const uint8_t* __restrict srcRow, uint8_t* __restrict dstRow, int32_t width) {
     for (int32_t x = 0; x + 1 < width; x += 2) {
         const uint8_t* px = srcRow + static_cast<size_t>(x) * 2;
         const int u = px[0], y0 = px[1], v = px[2], y1 = px[3];
 
-        uint8_t b, g, r;
-        YuvToBgr(y0, u, v, b, g, r);
+        const int uToB = t.uToB[u];
+        const int uToG = t.uToG[u];
+        const int vToR = t.vToR[v];
+        const int vToG = t.vToG[v];
+
+        const int yTerm0 = t.y[y0];
         uint8_t* dst0 = dstRow + static_cast<size_t>(x) * 4;
-        dst0[0] = b;
-        dst0[1] = g;
-        dst0[2] = r;
+        dst0[0] = ClampToByte((yTerm0 + uToB + 128) >> 8);
+        dst0[1] = ClampToByte((yTerm0 + uToG + vToG + 128) >> 8);
+        dst0[2] = ClampToByte((yTerm0 + vToR + 128) >> 8);
         dst0[3] = 0xFF;
 
-        YuvToBgr(y1, u, v, b, g, r);
+        const int yTerm1 = t.y[y1];
         uint8_t* dst1 = dstRow + static_cast<size_t>(x + 1) * 4;
-        dst1[0] = b;
-        dst1[1] = g;
-        dst1[2] = r;
+        dst1[0] = ClampToByte((yTerm1 + uToB + 128) >> 8);
+        dst1[1] = ClampToByte((yTerm1 + uToG + vToG + 128) >> 8);
+        dst1[2] = ClampToByte((yTerm1 + vToR + 128) >> 8);
         dst1[3] = 0xFF;
     }
 }
@@ -370,6 +374,18 @@ HRESULT DeckLinkCaptureSource::VideoInputFrameArrived(
                 const auto* bytes = static_cast<const uint8_t*>(audioData);
                 m_audioBuffer.insert(m_audioBuffer.end(), bytes, bytes + byteCount);
                 if (m_audioBuffer.size() > kMaxBufferedBytes) {
+                    // The consumer (EmbeddedAudioThreadMain) isn't draining as fast as
+                    // audio arrives — throttled (once/sec) so a sustained shortfall
+                    // doesn't flood the log, while still making a real backlog visible
+                    // (mirrors WasapiAudioCapture's equivalent overflow log).
+                    const auto now = std::chrono::steady_clock::now();
+                    if (now - m_lastAudioOverflowLog > std::chrono::seconds(1)) {
+                        m_lastAudioOverflowLog = now;
+                        LogDiagnostic(
+                            L"DeckLinkCaptureSource: embedded audio buffer over cap ("
+                            + std::to_wstring(m_audioBuffer.size()) + L" > "
+                            + std::to_wstring(kMaxBufferedBytes) + L" bytes), dropping oldest");
+                    }
                     m_audioBuffer.erase(
                         m_audioBuffer.begin(),
                         m_audioBuffer.begin() + static_cast<std::ptrdiff_t>(m_audioBuffer.size() - kMaxBufferedBytes));
@@ -510,11 +526,63 @@ HRESULT DeckLinkCaptureSource::VideoInputFrameArrived(
     // Source is native 8-bit YUV 4:2:2 (UYVY), 2 bytes/pixel — not BGRA32 — see the
     // ConvertUyvyRowToBgra32 comment above for why this is requested instead of asking
     // the card to convert on-board.
+    //
+    // Confirmed real bottleneck via direct timing (2026-10-07, live DeckLink 1080p59.94
+    // test): the single-threaded scalar conversion was measured taking 27-30ms per frame
+    // against a 16.68ms budget at 59.94fps — nearly double — pegging one CPU core solid
+    // from the moment the device opens, independent of streaming/bitrate/encoder
+    // (matching every earlier, inconclusive observation: bitrate-independent, GPU-encode
+    // idle, present before Start is even clicked, and unaffected by an unrelated UI-loop
+    // optimization tried first). Since only ONE core was ever pegged — the others sat
+    // idle the whole time — and row-by-row conversion has zero cross-row dependencies,
+    // splitting the frame into row bands across a few worker threads is a safe, purely
+    // *parallelized* speedup (identical per-pixel math, just computed concurrently
+    // instead of serially) rather than a hand-rolled SIMD rewrite, which would carry real
+    // risk of a subtle color/visual bug this project has no way to verify without the
+    // real hardware and a human looking at the preview. Kept at a conservative fixed 4
+    // workers (not hardware_concurrency()) to avoid oversubscribing a machine that's also
+    // running ffmpeg/NVENC during a real stream.
+    const auto conversionStart = std::chrono::steady_clock::now();
     const uint8_t* src = static_cast<const uint8_t*>(data);
-    for (int32_t row = 0; row < height; ++row) {
-        ConvertUyvyRowToBgra32(
-            src + static_cast<size_t>(row) * sourceStride,
-            m_latestFrameData.data() + static_cast<size_t>(row) * packedRowBytes, width);
+    const YuvToBgrTables& conversionTable = GetYuvToBgrTables();
+    constexpr int32_t kMaxConversionWorkers = 4;
+    const int32_t workerCount = (std::min)(kMaxConversionWorkers, (std::max)(int32_t{1}, height));
+    const int32_t rowsPerWorker = (height + workerCount - 1) / workerCount;
+    auto convertRows = [&](int32_t startRow, int32_t endRow) {
+        for (int32_t row = startRow; row < endRow; ++row) {
+            ConvertUyvyRowToBgra32(
+                conversionTable, src + static_cast<size_t>(row) * sourceStride,
+                m_latestFrameData.data() + static_cast<size_t>(row) * packedRowBytes, width);
+        }
+    };
+    std::vector<std::thread> conversionWorkers;
+    conversionWorkers.reserve(static_cast<size_t>(workerCount));
+    for (int32_t w = 1; w < workerCount; ++w) {
+        const int32_t startRow = w * rowsPerWorker;
+        const int32_t endRow = (std::min)(height, startRow + rowsPerWorker);
+        if (startRow >= endRow) {
+            break;
+        }
+        conversionWorkers.emplace_back(convertRows, startRow, endRow);
+    }
+    // This thread (the SDK's own callback thread) does the first band itself rather than
+    // spawning a 4th worker just to then sit idle waiting on it.
+    convertRows(0, (std::min)(height, rowsPerWorker));
+    for (auto& worker : conversionWorkers) {
+        worker.join();
+    }
+    const double conversionMs =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - conversionStart).count();
+    m_maxConversionMsThisWindow = (std::max)(m_maxConversionMsThisWindow, conversionMs);
+    {
+        const auto now = std::chrono::steady_clock::now();
+        if (now - m_lastConversionTimingLog > std::chrono::seconds(1)) {
+            m_lastConversionTimingLog = now;
+            LogDiagnostic(
+                L"DeckLinkCaptureSource: UYVY->BGRA32 conversion worst-case this window = " +
+                std::to_wstring(m_maxConversionMsThisWindow) + L"ms (frame budget at 59.94fps = 16.68ms)");
+            m_maxConversionMsThisWindow = 0.0;
+        }
     }
 
     m_hasFrame = true;

@@ -72,6 +72,8 @@ private:
     bool m_hasFrame = false;
     std::chrono::steady_clock::time_point m_lastNoSignalLog{};
     std::chrono::steady_clock::time_point m_lastQueueDepthLog{};
+    std::chrono::steady_clock::time_point m_lastConversionTimingLog{};
+    double m_maxConversionMsThisWindow = 0.0;
 
     int32_t m_width = 0;
     int32_t m_height = 0;
@@ -81,6 +83,7 @@ private:
     std::mutex m_audioMutex;
     std::deque<uint8_t> m_audioBuffer; // guarded by m_audioMutex
     bool m_audioCaptureActive = false; // guarded by m_audioMutex
+    std::chrono::steady_clock::time_point m_lastAudioOverflowLog{}; // guarded by m_audioMutex
 };
 
 } // namespace capturecore

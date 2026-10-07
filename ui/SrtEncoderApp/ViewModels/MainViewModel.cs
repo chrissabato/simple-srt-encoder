@@ -676,24 +676,39 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         StatusText = $"Deleted preset \"{name}\".";
     }
 
-    private PresetEncode BuildPresetEncode() => new()
+    private PresetEncode BuildPresetEncode()
     {
-        EncoderImpl = EncoderImpl,
-        RateControl = RateControl,
-        BitrateKbps = (int)BitrateKbps,
-        MaxBitrateKbps = (int)MaxBitrateKbps,
-        BufferSizeKbps = (int)BufferSizeKbps,
-        KeyframeIntervalSec = (int)KeyframeIntervalSec,
-        X264Preset = X264Preset,
-        OutputWidth = (int)OutputWidth,
-        OutputHeight = (int)OutputHeight,
-        OutputFrameRateNumerator = (int)OutputFrameRate,
-        OutputFrameRateDenominator = 1,
-        AudioEnabled = AudioEnabled,
-        AudioDeviceId = SelectedAudioDevice?.DeviceId ?? "",
-        AudioDeviceName = SelectedAudioDevice?.DisplayName ?? "",
-        AudioBitrateKbps = (int)AudioBitrateKbps,
-    };
+        // Was `(int)OutputFrameRate` / 1 below — truncated a drop-frame rate like 59.94 to
+        // a plain 59/1 passed to ffmpeg's `-r`, mislabeling every incoming frame's PTS
+        // spacing as 1/59s instead of the true 1/59.94s. Frames actually arrive at the true
+        // rate (confirmed in CaptureCore.log: the capture side negotiates the real
+        // 59.940060fps DeckLink mode via this same ToFrameRateRational helper), so that
+        // 1.6% mislabeling made ffmpeg's video PTS timeline run ~1.6% faster than real
+        // elapsed time while audio's PTS (driven by actual sample count/48000) stayed
+        // accurate — a steadily growing video-ahead-of-audio drift of about that
+        // percentage of elapsed stream time, which is what surfaced as a multi-second A/V
+        // desync on a real multi-minute DeckLink stream. Reusing the capture side's helper
+        // gets `-r` the exact rational (e.g. 60000/1001) instead of a rounded approximation.
+        var (outputFrameRateNumerator, outputFrameRateDenominator) = ToFrameRateRational(OutputFrameRate);
+        return new()
+        {
+            EncoderImpl = EncoderImpl,
+            RateControl = RateControl,
+            BitrateKbps = (int)BitrateKbps,
+            MaxBitrateKbps = (int)MaxBitrateKbps,
+            BufferSizeKbps = (int)BufferSizeKbps,
+            KeyframeIntervalSec = (int)KeyframeIntervalSec,
+            X264Preset = X264Preset,
+            OutputWidth = (int)OutputWidth,
+            OutputHeight = (int)OutputHeight,
+            OutputFrameRateNumerator = outputFrameRateNumerator,
+            OutputFrameRateDenominator = outputFrameRateDenominator,
+            AudioEnabled = AudioEnabled,
+            AudioDeviceId = SelectedAudioDevice?.DeviceId ?? "",
+            AudioDeviceName = SelectedAudioDevice?.DisplayName ?? "",
+            AudioBitrateKbps = (int)AudioBitrateKbps,
+        };
+    }
 
     private PresetSrt BuildPresetSrt() => new()
     {

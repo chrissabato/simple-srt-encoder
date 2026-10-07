@@ -163,14 +163,58 @@ std::wstring FfmpegProcessController::BuildCommandLine(
             << L" -i \"" << audio.pipeName << L"\"";
     }
 
-    cmd << L" -c:v " << encode.encoderImpl;
+    const std::wstring encoderImpl = encode.encoderImpl;
+    cmd << L" -c:v " << encoderImpl;
 
-    if (std::wstring(encode.encoderImpl) == L"libx264" && encode.x264Preset[0] != L'\0') {
+    if (encoderImpl == L"libx264" && encode.x264Preset[0] != L'\0') {
         cmd << L" -preset " << encode.x264Preset;
     }
 
-    cmd << L" -pix_fmt yuv420p"
-        << L" -b:v " << encode.bitrateKbps << L"k";
+    // CcRateControl (the UI's CBR/VBR picker) reached this struct but was never actually
+    // read here — `-b:v`/`-maxrate`/`-bufsize` alone don't force constant bitrate on any
+    // encoder; without an explicit rate-control flag, NVENC in particular defaults to a
+    // content-adaptive mode that can (and on a real DeckLink test, did: target 6000kbps,
+    // actual ~2300-2700kbps) land well under the requested bitrate for easy-to-encode
+    // content even with CBR selected in the UI. NVENC's `-rc`/libx264's `nal-hrd=cbr` are
+    // the two encoder families this app actually ships (see MainViewModel.
+    // AutoEncoderPreference); QSV/AMF aren't covered yet — left alone rather than guessing
+    // an unverified flag for hardware this project hasn't tested against.
+    const bool wantsCbr = encode.rateControl == CcRateControl::Cbr;
+    const bool isNvenc = encoderImpl.find(L"nvenc") != std::wstring::npos;
+    if (isNvenc) {
+        cmd << L" -rc " << (wantsCbr ? L"cbr" : L"vbr");
+    } else if (encoderImpl == L"libx264" && wantsCbr) {
+        // Requires -maxrate/-bufsize (already always emitted below) to be set — x264's
+        // CBR HRD mode paces output against them rather than just -b:v.
+        cmd << L" -x264-params nal-hrd=cbr";
+    }
+
+    // Confirmed real bottleneck (2026-10-07, live DeckLink 1080p59.94 test on the
+    // broadcast-account test machine): ffmpeg converts our raw BGRA frames to YUV420p via
+    // libswscale on a single CPU core before handing them to the encoder, and that cost
+    // is per-pixel, not bitrate-dependent (lowering -b:v from 6000k to 2000k didn't change
+    // the achieved fps at all, stuck ~57fps against a 59.94 target; Task Manager confirmed
+    // one core pegged near 100% while NVENC's own encode engine sat idle, and the same
+    // machine streams this exact signal fine via vMix, ruling out a real hardware
+    // ceiling). video's PTS timeline falls behind real elapsed time as a result while
+    // audio (driven by actual sample count) doesn't — the likely proximate cause of a
+    // multi-second A/V drift that persisted even after the OutputFrameRateNumerator/
+    // Denominator fix in MainViewModel.BuildPresetEncode.
+    // A GPU-side fix was tried and reverted the same day: `-vf
+    // hwupload_cuda,scale_cuda=...format=nv12` (scale_cuda/hwupload_cuda are confirmed
+    // present in this exact ffmpeg build via `-filters`) failed outright —
+    // "Unsupported conversion: bgra -> semiplanar8" — scale_cuda's CUDA kernels only
+    // reformat/resize within the YUV family (e.g. post hardware-decode nv12 cleanup);
+    // they do not do RGB->YUV color-space conversion at all, so there is no GPU-filter
+    // shortcut for a raw BGRA source on this ffmpeg build. Left at plain `-pix_fmt
+    // yuv420p` (the CPU path) for every encoder, NVENC included, until a real fix lands —
+    // see the project memory entry dated 2026-10-07 for the next avenue being
+    // considered (converting straight from DeckLink's native UYVY to NV12 in our own
+    // capture code, skipping the BGRA detour and ffmpeg's conversion entirely, rather
+    // than guessing at more unverified ffmpeg flags against hardware we can't test here).
+    cmd << L" -pix_fmt yuv420p";
+
+    cmd << L" -b:v " << encode.bitrateKbps << L"k";
     if (encode.maxBitrateKbps > 0) {
         cmd << L" -maxrate " << encode.maxBitrateKbps << L"k";
     }
