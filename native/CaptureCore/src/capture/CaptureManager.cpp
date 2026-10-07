@@ -50,10 +50,17 @@ CaptureManager::~CaptureManager() {
 int32_t CaptureManager::EnumerateDevices(CcDeviceInfo* outArray, int32_t maxCount) {
     std::vector<CcDeviceInfo> all;
     for (auto& enumerator : m_enumerators) {
+        const int32_t backend = static_cast<int32_t>(enumerator->Backend());
         if (!enumerator->IsAvailable()) {
+            LogDiagnostic(
+                L"CaptureManager::EnumerateDevices: backend " + std::to_wstring(backend) +
+                L" is not available, skipping");
             continue;
         }
         auto devices = enumerator->Enumerate();
+        LogDiagnostic(
+            L"CaptureManager::EnumerateDevices: backend " + std::to_wstring(backend) + L" available, found " +
+            std::to_wstring(devices.size()) + L" device(s)");
         all.insert(all.end(), devices.begin(), devices.end());
     }
 

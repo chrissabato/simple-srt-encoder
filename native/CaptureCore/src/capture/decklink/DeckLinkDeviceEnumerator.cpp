@@ -44,8 +44,22 @@ bool TryGetInputAndPersistentId(IDeckLink* deckLink, ComPtr<IDeckLinkInput>& out
 
 bool DeckLinkDeviceEnumerator::IsAvailable() const {
     ComPtr<IDeckLinkIterator> iterator;
-    return SUCCEEDED(CoCreateInstance(
-        CLSID_CDeckLinkIterator, nullptr, CLSCTX_ALL, IID_IDeckLinkIterator, &iterator));
+    const HRESULT hr = CoCreateInstance(
+        CLSID_CDeckLinkIterator, nullptr, CLSCTX_ALL, IID_IDeckLinkIterator, &iterator);
+    if (FAILED(hr)) {
+        // Logged unconditionally (not just on first failure) since this is cheap and is
+        // the only signal that explains "DeckLink hardware is installed but none of our
+        // DeckLink-specific devices show up" — e.g. REGDB_E_CLASSNOTREG (0x80040154)
+        // means the DeckLink API COM class itself isn't registered for this process's
+        // bitness, which happens with some older/mismatched Desktop Video driver
+        // installs even though a legacy DirectShow capture filter still shows up fine
+        // via the separate DirectShowDeviceEnumerator.
+        std::wstringstream ss;
+        ss << L"DeckLinkDeviceEnumerator::IsAvailable: CoCreateInstance(CLSID_CDeckLinkIterator) failed, hr=0x"
+           << std::hex << static_cast<unsigned long>(hr);
+        LogDiagnostic(ss.str());
+    }
+    return SUCCEEDED(hr);
 }
 
 std::vector<CcDeviceInfo> DeckLinkDeviceEnumerator::Enumerate() {
