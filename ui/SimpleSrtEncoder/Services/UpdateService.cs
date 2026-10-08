@@ -15,7 +15,7 @@ internal sealed class UpdateService
     // Public repo, so no access token is needed here — see GithubSource's accessToken
     // param below, intentionally left empty. Releases get published via release.ps1's
     // `vpk upload github` step.
-    private const string GithubRepoUrl = "https://github.com/chrissabato/srt-encoder";
+    private const string GithubRepoUrl = "https://github.com/chrissabato/simple-srt-encoder";
 
     private readonly UpdateManager _manager = new(new GithubSource(GithubRepoUrl, accessToken: "", prerelease: false));
 

@@ -39,7 +39,7 @@ See the project plan for full context. Summary of the load-bearing decisions:
   `InstallUpdateAndRestartAsync` (checked once at startup, surfaced via an InfoBar in
   `MainPage.xaml`). `release.ps1` publishes, `vpk pack`s (signed by default), and (given
   `-RepoUrl`) `vpk upload github`s a release to
-  https://github.com/chrissabato/srt-encoder.
+  https://github.com/chrissabato/simple-srt-encoder.
   **Resolved (2026-10-02)**: the `REGDB_E_CLASSNOTREG`/`0xc000027b` unpackaged-launch
   crash noted above as an unverified risk turned out to be real — reproduced via an actual
   Velopack install reporting "partially succeeded", root-caused via Windows Event Viewer.
