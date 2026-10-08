@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Windows.Graphics;
@@ -51,6 +52,13 @@ public sealed partial class MainWindow : Window
 
     private Rect? _restoreBounds;
     private int? _restoreStyle;
+    // Tracks ExitFullscreen's deferred bounds-restore timer (see its own comment) so a
+    // rapid re-entry (double-tap / F11-Esc-F11 within the 100ms delay) can cancel it
+    // instead of letting it fire later and fight whatever fullscreen state is active by
+    // then — and so EnterFullscreen knows not to re-capture _restoreBounds from the
+    // window's current (still fullscreen-sized, not yet visually restored) rect in that
+    // window, which previously corrupted _restoreBounds permanently.
+    private DispatcherQueueTimer? _pendingRestoreTimer;
 
     public MainWindow()
     {
@@ -83,21 +91,40 @@ public sealed partial class MainWindow : Window
     public void EnterFullscreen()
     {
         var hwnd = WindowNative.GetWindowHandle(this);
-        GetWindowRect(hwnd, out var currentBounds);
-        _restoreBounds = currentBounds;
+
+        if (_pendingRestoreTimer is { } pending)
+        {
+            // Re-entering fullscreen while ExitFullscreen's deferred bounds-restore is
+            // still pending: cancel the stale timer (it would otherwise fire later and
+            // forcibly un-fullscreen this new session) and reuse the bounds/style
+            // EnterFullscreen already captured the first time, rather than calling
+            // GetWindowRect now — at this exact moment the window's style has already
+            // been restored (ExitFullscreen does that synchronously, below) but its
+            // size/position hasn't (that's the part still pending), so GetWindowRect
+            // here would return the still-fullscreen-sized rect and permanently corrupt
+            // _restoreBounds with the wrong value.
+            pending.Stop();
+            _pendingRestoreTimer = null;
+        }
+        else
+        {
+            GetWindowRect(hwnd, out var currentBounds);
+            _restoreBounds = currentBounds;
+
+            // Deliberately not touching OverlappedPresenter.IsResizable/SetBorderAndTitleBar
+            // here: mixing those with the raw GetWindowLong/SetWindowLong/SetWindowPos calls
+            // below left AppWindow's internal geometry cache out of sync with the real Win32
+            // window, and it kept fighting ExitFullscreen's restore back to these fullscreen
+            // bounds (confirmed — every variant of deferring/reordering that restore still
+            // lost the race). Plain Win32 for everything, below, avoids that entirely.
+            _restoreStyle = GetWindowLong(hwnd, GwlStyle);
+        }
 
         AppTitleBar.Visibility = Visibility.Collapsed;
         SetTitleBar(null);
         AppWindow.TitleBar.SetDragRectangles([]);
 
-        // Deliberately not touching OverlappedPresenter.IsResizable/SetBorderAndTitleBar
-        // here: mixing those with the raw GetWindowLong/SetWindowLong/SetWindowPos calls
-        // below left AppWindow's internal geometry cache out of sync with the real Win32
-        // window, and it kept fighting ExitFullscreen's restore back to these fullscreen
-        // bounds (confirmed — every variant of deferring/reordering that restore still
-        // lost the race). Plain Win32 for everything, below, avoids that entirely.
-        _restoreStyle = GetWindowLong(hwnd, GwlStyle);
-        var style = _restoreStyle.Value & ~(WsCaption | WsThickFrame | WsSysMenu | WsMinimizeBox | WsMaximizeBox);
+        var style = _restoreStyle!.Value & ~(WsCaption | WsThickFrame | WsSysMenu | WsMinimizeBox | WsMaximizeBox);
         SetWindowLong(hwnd, GwlStyle, style);
 
         // Overshoot the monitor bounds by 1px on every edge. A window whose bounds
@@ -120,9 +147,17 @@ public sealed partial class MainWindow : Window
     {
         var hwnd = WindowNative.GetWindowHandle(this);
 
+        // Cancel any already-pending restore from a previous ExitFullscreen call rather
+        // than letting two timers race to apply the same (harmless but wasteful)
+        // restore twice.
+        if (_pendingRestoreTimer is { } existingTimer)
+        {
+            existingTimer.Stop();
+            _pendingRestoreTimer = null;
+        }
+
         if (_restoreStyle is { } style)
         {
-            _restoreStyle = null;
             SetWindowLong(hwnd, GwlStyle, style);
         }
 
@@ -138,14 +173,25 @@ public sealed partial class MainWindow : Window
         // by the fact that an external SetWindowPos on this hwnd, run right after
         // ExitFullscreen returned, applied and stuck with no fight from anything.
         // A short delay lets that internal recalculation finish first.
+        //
+        // _restoreBounds/_restoreStyle are deliberately NOT cleared until the timer
+        // below actually fires: a rapid re-EnterFullscreen within this 100ms window
+        // cancels this timer (via _pendingRestoreTimer) and reuses these saved values
+        // instead of capturing fresh (and, at that moment, still-wrong) ones — see
+        // EnterFullscreen's comment.
         if (_restoreBounds is { } bounds)
         {
-            _restoreBounds = null;
             var timer = DispatcherQueue.CreateTimer();
             timer.Interval = TimeSpan.FromMilliseconds(100);
             timer.IsRepeating = false;
             timer.Tick += (_, _) =>
+            {
                 SetWindowPos(hwnd, HwndNoTopmost, bounds.Left, bounds.Top, bounds.Right - bounds.Left, bounds.Bottom - bounds.Top, SwpFrameChanged);
+                _restoreBounds = null;
+                _restoreStyle = null;
+                _pendingRestoreTimer = null;
+            };
+            _pendingRestoreTimer = timer;
             timer.Start();
         }
     }

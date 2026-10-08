@@ -92,7 +92,21 @@ bool FramePipeWriter::WriteFrame(const void* data, size_t length) {
         if (GetLastError() != ERROR_IO_PENDING) {
             return false;
         }
-        if (!GetOverlappedResult(m_pipe, &overlapped, &bytesWritten, TRUE)) {
+        // Bounded wait instead of GetOverlappedResult's own indefinite bWait=TRUE: if
+        // ffmpeg stops reading without exiting (e.g. its own write to SRT is stalled on
+        // network backpressure, so it never gets back around to draining this pipe), an
+        // unbounded wait here would hang the calling streaming/audio thread forever with
+        // no way to notice or recover. kWriteTimeoutMs is generous — matching this
+        // codebase's other "something's actually wrong by now" timeouts (see
+        // WaitForConnection's callers, ProbeEncoder) — so a normal brief stall doesn't
+        // false-positive into treating a healthy ffmpeg as dead.
+        constexpr DWORD kWriteTimeoutMs = 5000;
+        if (WaitForSingleObject(m_writeEvent, kWriteTimeoutMs) != WAIT_OBJECT_0) {
+            LogDiagnostic(L"FramePipeWriter: WriteFrame timed out waiting for ffmpeg to read; cancelling");
+            CancelIo(m_pipe);
+            return false;
+        }
+        if (!GetOverlappedResult(m_pipe, &overlapped, &bytesWritten, FALSE)) {
             return false;
         }
     }

@@ -388,6 +388,7 @@ void CaptureManager::StreamingThreadMain(CcEncodeSettings encode, int32_t source
     const int32_t frameRateDen = std::max(1, encode.outputFrameRate.denominator);
     const auto frameInterval = std::chrono::duration<double>(static_cast<double>(frameRateDen) / frameRateNum);
     auto nextFrameTime = std::chrono::steady_clock::now();
+    bool haveFrame = false;
 
     while (!m_streamingStopRequested.load() && m_ffmpeg.IsRunning()) {
         CcFrameBuffer frame{};
@@ -395,6 +396,18 @@ void CaptureManager::StreamingThreadMain(CcEncodeSettings encode, int32_t source
         frame.capacity = static_cast<int32_t>(frameBuffer.size());
 
         if (TryGetLatestFrame(frame) && frame.width == sourceWidth && frame.height == sourceHeight) {
+            haveFrame = true;
+        }
+        // A transient TryGetLatestFrame failure (device stutter, momentary lock
+        // contention) used to skip the pipe write for this tick entirely — but ffmpeg's
+        // rawvideo input has no per-frame timestamps, so a skipped write just means one
+        // fewer frame's worth of bytes arrived than its fixed -r expects, which slows
+        // ffmpeg's video PTS timeline relative to audio's (driven by actual decoded
+        // sample count, unaffected by this). Repeating frameBuffer's last successfully
+        // written contents instead keeps the byte cadence (and therefore the video
+        // timeline) correct — frameBuffer already holds the last good frame verbatim,
+        // since TryGetLatestFrame only overwrites it on success.
+        if (haveFrame) {
             if (!m_pipeWriter->WriteFrame(frameBuffer.data(), frameBuffer.size())) {
                 LogDiagnostic(L"StreamingThreadMain: WriteFrame failed, exiting loop");
                 break; // ffmpeg closed its end of the pipe (exited)

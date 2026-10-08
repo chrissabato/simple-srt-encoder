@@ -347,7 +347,18 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             return;
         }
         UpdateStatusText = "Downloading update…";
-        await _updates.DownloadAndApplyAsync(_pendingUpdate);
+        try
+        {
+            await _updates.DownloadAndApplyAsync(_pendingUpdate);
+        }
+        catch (Exception ex)
+        {
+            // The caller (MainPage.InstallUpdateButton_Click) is an `async void` handler
+            // — an exception that escapes this method would cross that boundary
+            // unhandled and fail-fast crash the whole process (0xc000027b), e.g. on a
+            // dropped network connection or a failed package verification mid-download.
+            UpdateStatusText = $"Update failed: {ex.Message}";
+        }
     }
 
     private bool _isStreaming;
@@ -526,7 +537,18 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
         encode.EncoderImpl = resolvedEncoder;
 
-        var started = _captureCore.StartStream(encode, BuildPresetSrt(), plaintextPassphrase, ffmpegExeName);
+        // An empty PassphraseBox means "use the preset's saved passphrase" (the box is
+        // deliberately cleared on preset load/apply so the plaintext isn't retained in
+        // the UI — see ApplySelectedPresetFrom) — PresetService.UnprotectPassphrase was
+        // otherwise never called anywhere, so a preset's encrypted passphrase silently
+        // never reached ffmpeg unless the user retyped it before every stream.
+        var passphrase = plaintextPassphrase;
+        if (string.IsNullOrEmpty(passphrase) && !string.IsNullOrEmpty(SelectedPreset?.Srt.PassphraseProtected))
+        {
+            passphrase = PresetService.UnprotectPassphrase(SelectedPreset.Srt.PassphraseProtected);
+        }
+
+        var started = _captureCore.StartStream(encode, BuildPresetSrt(), passphrase, ffmpegExeName);
         IsStreaming = started;
         StatusText = started
             ? requestedAuto || !string.IsNullOrEmpty(ffmpegExeName)

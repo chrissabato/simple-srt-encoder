@@ -80,6 +80,16 @@ private:
     // (the default) resolves to "ffmpeg.exe".
     static std::wstring FindFfmpegExePath(const std::wstring& exeName = L"");
 
+    // Closes any still-open process/pipe handles and zeroes the members so a later
+    // CreatePipe/CreateProcessW never overwrites a live handle value without closing it
+    // first. Shared by Stop() and by the top of Start() — the latter needs this too
+    // because a prior ffmpeg that exited on its own (SRT refused, crash, ...) leaves
+    // these handles open: nothing calls Stop() in that path (CaptureManager::StartStream
+    // calls m_ffmpeg.Start() directly, and the C# side's RefreshStats() only flips a UI
+    // flag when it notices ffmpeg died), so Start() used to silently leak 5 handles
+    // (hProcess, hThread, and the three pipes) on every such restart.
+    void CloseProcessHandles();
+
     PROCESS_INFORMATION m_processInfo{};
     HANDLE m_stdoutReadPipe = nullptr;
     HANDLE m_stdinWritePipe = nullptr; // for sending ffmpeg's interactive 'q' quit command

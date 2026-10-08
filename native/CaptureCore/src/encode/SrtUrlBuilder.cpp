@@ -2,6 +2,7 @@
 
 #include <sstream>
 #include <iomanip>
+#include <windows.h>
 
 namespace capturecore {
 
@@ -9,20 +10,45 @@ namespace {
 
 // Minimal percent-encoding for URL query values (streamid/passphrase may contain
 // characters like '&', '=', ' ' that would otherwise break the query string).
+//
+// Percent-encodes UTF-8 bytes, not raw UTF-16 code units: casting a wchar_t directly to
+// unsigned char (the previous approach) silently truncated every code point above U+00FF
+// to its low byte, producing a mangled result instead of a valid percent-encoded
+// sequence for any non-ASCII streamid/passphrase.
 std::wstring UrlEncode(const std::wstring& value) {
+    if (value.empty()) {
+        return L"";
+    }
+    const int utf8Length = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    std::string utf8(static_cast<size_t>(utf8Length), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, value.c_str(), -1, utf8.data(), utf8Length, nullptr, nullptr);
+
     std::wstringstream out;
-    for (wchar_t ch : value) {
+    for (unsigned char ch : utf8) {
+        if (ch == '\0') {
+            break; // WideCharToMultiByte's -1 length includes the terminator
+        }
         const bool isUnreserved =
-            (ch >= L'A' && ch <= L'Z') || (ch >= L'a' && ch <= L'z') ||
-            (ch >= L'0' && ch <= L'9') || ch == L'-' || ch == L'_' || ch == L'.' || ch == L'~';
+            (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
+            (ch >= '0' && ch <= '9') || ch == '-' || ch == '_' || ch == '.' || ch == '~';
         if (isUnreserved) {
-            out << ch;
+            out << static_cast<wchar_t>(ch);
         } else {
             out << L'%' << std::uppercase << std::hex << std::setw(2) << std::setfill(L'0')
-                << static_cast<unsigned int>(static_cast<unsigned char>(ch));
+                << static_cast<unsigned int>(ch);
         }
     }
     return out.str();
+}
+
+// Wraps a literal IPv6 host (containing ':') in brackets per RFC 3986 — srt.host is
+// taken as-is otherwise. Without this, "::1" produced "srt://::1:9000", which is
+// ambiguous between host and port and fails to parse as the intended address.
+std::wstring FormatHost(const std::wstring& host) {
+    if (host.find(L':') != std::wstring::npos && !host.empty() && host.front() != L'[') {
+        return L"[" + host + L"]";
+    }
+    return host;
 }
 
 const wchar_t* ModeToString(CcSrtMode mode) {
@@ -38,7 +64,7 @@ const wchar_t* ModeToString(CcSrtMode mode) {
 
 std::wstring BuildSrtUrl(const CcSrtSettings& srt) {
     std::wstringstream url;
-    url << L"srt://" << srt.host << L":" << srt.port
+    url << L"srt://" << FormatHost(srt.host) << L":" << srt.port
         << L"?mode=" << ModeToString(srt.mode)
         << L"&latency=" << srt.latencyMs;
 

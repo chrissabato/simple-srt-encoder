@@ -58,6 +58,26 @@ FfmpegProcessController::~FfmpegProcessController() {
     Stop();
 }
 
+void FfmpegProcessController::CloseProcessHandles() {
+    if (m_stdoutReadPipe) {
+        CloseHandle(m_stdoutReadPipe);
+        m_stdoutReadPipe = nullptr;
+    }
+    if (m_stderrReadPipe) {
+        CloseHandle(m_stderrReadPipe);
+        m_stderrReadPipe = nullptr;
+    }
+    if (m_stdinWritePipe) {
+        CloseHandle(m_stdinWritePipe);
+        m_stdinWritePipe = nullptr;
+    }
+    if (m_processInfo.hProcess) {
+        CloseHandle(m_processInfo.hProcess);
+        CloseHandle(m_processInfo.hThread);
+        ZeroMemory(&m_processInfo, sizeof(m_processInfo));
+    }
+}
+
 std::wstring FfmpegProcessController::FindFfmpegExePath(const std::wstring& exeName) {
     return GetExecutableDirectory() + L"\\ffmpeg\\" + (exeName.empty() ? L"ffmpeg.exe" : exeName);
 }
@@ -164,10 +184,13 @@ std::wstring FfmpegProcessController::BuildCommandLine(
     }
 
     const std::wstring encoderImpl = encode.encoderImpl;
-    cmd << L" -c:v " << encoderImpl;
+    cmd << L" -c:v \"" << encoderImpl << L"\"";
 
+    // Quoted because X264Preset is a free-text UI field (MainPage.xaml's TextBox, not a
+    // locked dropdown) — an unquoted value containing a space would otherwise split into
+    // a stray extra command-line argument instead of one -preset value.
     if (encoderImpl == L"libx264" && encode.x264Preset[0] != L'\0') {
-        cmd << L" -preset " << encode.x264Preset;
+        cmd << L" -preset \"" << encode.x264Preset << L"\"";
     }
 
     // CcRateControl (the UI's CBR/VBR picker) reached this struct but was never actually
@@ -283,6 +306,10 @@ bool FfmpegProcessController::Start(
     if (m_stderrThread.joinable()) {
         m_stderrThread.join();
     }
+    // See CloseProcessHandles' comment: a previous ffmpeg that exited on its own leaves
+    // these open (nothing calls Stop() in that path), and every handle member below is
+    // about to be overwritten by a fresh CreatePipe/CreateProcessW regardless.
+    CloseProcessHandles();
 
     SECURITY_ATTRIBUTES pipeSecurity{};
     pipeSecurity.nLength = sizeof(SECURITY_ATTRIBUTES);
@@ -311,6 +338,7 @@ bool FfmpegProcessController::Start(
     if (!CreatePipe(&stdinRead, &m_stdinWritePipe, &pipeSecurity, 0)) {
         CloseHandle(m_stdoutReadPipe);
         m_stdoutReadPipe = nullptr;
+        CloseHandle(stdoutWrite);
         CloseHandle(m_stderrReadPipe);
         m_stderrReadPipe = nullptr;
         CloseHandle(stderrWrite);
@@ -358,12 +386,7 @@ bool FfmpegProcessController::Start(
     CloseHandle(stderrWrite);
 
     if (!created) {
-        CloseHandle(m_stdoutReadPipe);
-        m_stdoutReadPipe = nullptr;
-        CloseHandle(m_stdinWritePipe);
-        m_stdinWritePipe = nullptr;
-        CloseHandle(m_stderrReadPipe);
-        m_stderrReadPipe = nullptr;
+        CloseProcessHandles();
         return false;
     }
 
@@ -521,23 +544,7 @@ void FfmpegProcessController::Stop() {
         m_stderrThread.join();
     }
 
-    if (m_stdoutReadPipe) {
-        CloseHandle(m_stdoutReadPipe);
-        m_stdoutReadPipe = nullptr;
-    }
-    if (m_stderrReadPipe) {
-        CloseHandle(m_stderrReadPipe);
-        m_stderrReadPipe = nullptr;
-    }
-    if (m_stdinWritePipe) {
-        CloseHandle(m_stdinWritePipe);
-        m_stdinWritePipe = nullptr;
-    }
-    if (m_processInfo.hProcess) {
-        CloseHandle(m_processInfo.hProcess);
-        CloseHandle(m_processInfo.hThread);
-        ZeroMemory(&m_processInfo, sizeof(m_processInfo));
-    }
+    CloseProcessHandles();
 
     {
         std::lock_guard<std::mutex> lock(m_statsMutex);
