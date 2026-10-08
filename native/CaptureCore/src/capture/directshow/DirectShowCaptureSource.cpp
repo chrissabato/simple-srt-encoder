@@ -87,58 +87,105 @@ const YuvToBgrTables& GetYuvToBgrTables() {
     return tables;
 }
 
-void YuvToBgr(int y, int u, int v, uint8_t& b, uint8_t& g, uint8_t& r) {
-    const YuvToBgrTables& t = GetYuvToBgrTables();
-    const int yTerm = t.y[y];
-    r = ClampToByte((yTerm + t.vToR[v] + 128) >> 8);
-    g = ClampToByte((yTerm + t.uToG[u] + t.vToG[v] + 128) >> 8);
-    b = ClampToByte((yTerm + t.uToB[u] + 128) >> 8);
-}
-
 // YUY2 is packed 4:2:2 — 4 bytes encode 2 horizontal pixels: Y0 U Y1 V.
-void ConvertYuy2RowToBgra32(const uint8_t* srcRow, uint8_t* dstRow, int32_t width) {
+//
+// Takes the lookup tables by parameter and computes the four chroma-dependent terms
+// (uToB/uToG/vToR/vToG) once per pixel pair instead of once per luma sample — U/V are
+// shared by both samples in 4:2:2 — same algebraic simplification already proven
+// bit-identical for DeckLinkCaptureSource's equivalent UYVY converter (2026-10-07).
+void ConvertYuy2RowToBgra32(const YuvToBgrTables& t, const uint8_t* __restrict srcRow, uint8_t* __restrict dstRow, int32_t width) {
     for (int32_t x = 0; x + 1 < width; x += 2) {
         const uint8_t* px = srcRow + static_cast<size_t>(x) * 2;
         const int y0 = px[0], u = px[1], y1 = px[2], v = px[3];
 
-        uint8_t b, g, r;
-        YuvToBgr(y0, u, v, b, g, r);
+        const int uToB = t.uToB[u];
+        const int uToG = t.uToG[u];
+        const int vToR = t.vToR[v];
+        const int vToG = t.vToG[v];
+
+        const int yTerm0 = t.y[y0];
         uint8_t* dst0 = dstRow + static_cast<size_t>(x) * 4;
-        dst0[0] = b;
-        dst0[1] = g;
-        dst0[2] = r;
+        dst0[0] = ClampToByte((yTerm0 + uToB + 128) >> 8);
+        dst0[1] = ClampToByte((yTerm0 + uToG + vToG + 128) >> 8);
+        dst0[2] = ClampToByte((yTerm0 + vToR + 128) >> 8);
         dst0[3] = 0xFF;
 
-        YuvToBgr(y1, u, v, b, g, r);
+        const int yTerm1 = t.y[y1];
         uint8_t* dst1 = dstRow + static_cast<size_t>(x + 1) * 4;
-        dst1[0] = b;
-        dst1[1] = g;
-        dst1[2] = r;
+        dst1[0] = ClampToByte((yTerm1 + uToB + 128) >> 8);
+        dst1[1] = ClampToByte((yTerm1 + uToG + vToG + 128) >> 8);
+        dst1[2] = ClampToByte((yTerm1 + vToR + 128) >> 8);
         dst1[3] = 0xFF;
     }
 }
 
 // UYVY is packed 4:2:2 like YUY2, just with U/Y/V/Y byte order instead of Y/U/Y/V —
 // the traditional broadcast/SDI packing (vMix's virtual outputs negotiate this one).
-void ConvertUyvyRowToBgra32(const uint8_t* srcRow, uint8_t* dstRow, int32_t width) {
+// Same per-pixel-pair chroma-term simplification as ConvertYuy2RowToBgra32 above.
+void ConvertUyvyRowToBgra32(const YuvToBgrTables& t, const uint8_t* __restrict srcRow, uint8_t* __restrict dstRow, int32_t width) {
     for (int32_t x = 0; x + 1 < width; x += 2) {
         const uint8_t* px = srcRow + static_cast<size_t>(x) * 2;
         const int u = px[0], y0 = px[1], v = px[2], y1 = px[3];
 
-        uint8_t b, g, r;
-        YuvToBgr(y0, u, v, b, g, r);
+        const int uToB = t.uToB[u];
+        const int uToG = t.uToG[u];
+        const int vToR = t.vToR[v];
+        const int vToG = t.vToG[v];
+
+        const int yTerm0 = t.y[y0];
         uint8_t* dst0 = dstRow + static_cast<size_t>(x) * 4;
-        dst0[0] = b;
-        dst0[1] = g;
-        dst0[2] = r;
+        dst0[0] = ClampToByte((yTerm0 + uToB + 128) >> 8);
+        dst0[1] = ClampToByte((yTerm0 + uToG + vToG + 128) >> 8);
+        dst0[2] = ClampToByte((yTerm0 + vToR + 128) >> 8);
         dst0[3] = 0xFF;
 
-        YuvToBgr(y1, u, v, b, g, r);
+        const int yTerm1 = t.y[y1];
         uint8_t* dst1 = dstRow + static_cast<size_t>(x + 1) * 4;
-        dst1[0] = b;
-        dst1[1] = g;
-        dst1[2] = r;
+        dst1[0] = ClampToByte((yTerm1 + uToB + 128) >> 8);
+        dst1[1] = ClampToByte((yTerm1 + uToG + vToG + 128) >> 8);
+        dst1[2] = ClampToByte((yTerm1 + vToR + 128) >> 8);
         dst1[3] = 0xFF;
+    }
+}
+
+// Splits a packed-YUV frame's row conversion across worker threads — ported from
+// DeckLinkCaptureSource's identical fix (2026-10-07) after direct timing on this
+// backend (DirectShowCaptureSource::OnBuffer's lockWait/conversion diagnostic) found
+// the same single-core-pegged bottleneck: conversion averaging ~18-20ms but spiking to
+// 35-46ms against a 33.3ms budget at 30fps, causing the pacing thread to occasionally
+// re-sample a stale frame (visible as stutter on the receiving end) despite ffmpeg's
+// own progress stats staying clean throughout. Row-by-row conversion has zero
+// cross-row dependencies, so this is a safe, purely-parallelized speedup (identical
+// per-pixel math, just computed concurrently) rather than a SIMD rewrite. Kept at a
+// conservative fixed 4 workers, same reasoning as DeckLink's copy, to avoid
+// oversubscribing a machine also running ffmpeg/NVENC during a real stream.
+template <typename RowConverter>
+void ConvertRowsParallel(
+    RowConverter&& convertRow, const uint8_t* src, size_t sourceStride, uint8_t* dst, size_t packedRowBytes,
+    int32_t width, size_t rowsToConvert) {
+    const YuvToBgrTables& table = GetYuvToBgrTables();
+    constexpr size_t kMaxConversionWorkers = 4;
+    const size_t workerCount = (std::min)(kMaxConversionWorkers, std::max<size_t>(1, rowsToConvert));
+    const size_t rowsPerWorker = (rowsToConvert + workerCount - 1) / workerCount;
+    auto convertRows = [&](size_t startRow, size_t endRow) {
+        for (size_t row = startRow; row < endRow; ++row) {
+            convertRow(table, src + row * sourceStride, dst + row * packedRowBytes, width);
+        }
+    };
+    std::vector<std::thread> workers;
+    for (size_t w = 1; w < workerCount; ++w) {
+        const size_t startRow = w * rowsPerWorker;
+        const size_t endRow = (std::min)(rowsToConvert, startRow + rowsPerWorker);
+        if (startRow >= endRow) {
+            break;
+        }
+        workers.emplace_back(convertRows, startRow, endRow);
+    }
+    // This thread (the DirectShow grabber's own callback thread) does the first band
+    // itself rather than spawning a 4th worker just to then sit idle waiting on it.
+    convertRows(0, (std::min)(rowsToConvert, rowsPerWorker));
+    for (auto& worker : workers) {
+        worker.join();
     }
 }
 
@@ -405,20 +452,18 @@ void DirectShowCaptureSource::OnBuffer(const uint8_t* data, long length) {
             const size_t sourceStride = static_cast<size_t>(m_width) * 2;
             const size_t maxRows = sourceStride > 0 ? static_cast<size_t>(length) / sourceStride : 0;
             const size_t rowsToConvert = std::min<size_t>(maxRows, static_cast<size_t>(m_height));
-            for (size_t row = 0; row < rowsToConvert; ++row) {
-                ConvertYuy2RowToBgra32(
-                    data + row * sourceStride, m_latestFrameData.data() + row * packedRowBytes, m_width);
-            }
+            ConvertRowsParallel(
+                ConvertYuy2RowToBgra32, data, sourceStride, m_latestFrameData.data(), packedRowBytes, m_width,
+                rowsToConvert);
             break;
         }
         case SourceFormat::Uyvy: {
             const size_t sourceStride = static_cast<size_t>(m_width) * 2;
             const size_t maxRows = sourceStride > 0 ? static_cast<size_t>(length) / sourceStride : 0;
             const size_t rowsToConvert = std::min<size_t>(maxRows, static_cast<size_t>(m_height));
-            for (size_t row = 0; row < rowsToConvert; ++row) {
-                ConvertUyvyRowToBgra32(
-                    data + row * sourceStride, m_latestFrameData.data() + row * packedRowBytes, m_width);
-            }
+            ConvertRowsParallel(
+                ConvertUyvyRowToBgra32, data, sourceStride, m_latestFrameData.data(), packedRowBytes, m_width,
+                rowsToConvert);
             break;
         }
     }
