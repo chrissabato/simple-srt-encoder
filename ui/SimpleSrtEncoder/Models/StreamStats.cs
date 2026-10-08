@@ -1,4 +1,4 @@
-namespace SrtEncoderApp.Models;
+namespace SimpleSrtEncoder.Models;
 
 public enum ConnectionState
 {

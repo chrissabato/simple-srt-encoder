@@ -5,11 +5,11 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media.Imaging;
-using SrtEncoderApp.Interop;
-using SrtEncoderApp.Models;
-using SrtEncoderApp.ViewModels;
+using SimpleSrtEncoder.Interop;
+using SimpleSrtEncoder.Models;
+using SimpleSrtEncoder.ViewModels;
 
-namespace SrtEncoderApp;
+namespace SimpleSrtEncoder;
 
 /// <summary>
 /// The main content page. Hosts device selection, live preview, encode/SRT settings,
@@ -85,6 +85,10 @@ public sealed partial class MainPage : Page
         {
             return;
         }
+
+        var awaitingStream = ViewModel.MeterAwaitingStream;
+        PreviewMeter.SetAwaitingStream(awaitingStream);
+        FullscreenMeter.SetAwaitingStream(awaitingStream);
 
         ViewModel.RefreshLoudness();
         PreviewMeter.Update(ViewModel.Loudness);

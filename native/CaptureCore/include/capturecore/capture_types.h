@@ -1,7 +1,7 @@
 #pragma once
 
 // POD types shared across the CaptureCore.dll C ABI (see capturecore_api.h).
-// Mirrored by hand in ui/SrtEncoderApp/Interop/NativeStructs.cs — keep the two in sync.
+// Mirrored by hand in ui/SimpleSrtEncoder/Interop/NativeStructs.cs — keep the two in sync.
 //
 // Conventions, since this boundary is marshaled with classic P/Invoke (not a binding
 // generator): fixed-size wchar_t[] buffers (not pointers) for strings, no bool (use

@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 
-namespace SrtEncoderApp.Interop;
+namespace SimpleSrtEncoder.Interop;
 
 /// <summary>
 /// P/Invoke surface for CaptureCore.dll (native/CaptureCore). Mirrors

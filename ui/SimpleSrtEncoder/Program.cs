@@ -2,7 +2,7 @@ using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Velopack;
 
-namespace SrtEncoderApp;
+namespace SimpleSrtEncoder;
 
 /// <summary>
 /// Custom entry point (DISABLE_XAML_GENERATED_MAIN in the csproj suppresses the WinUI

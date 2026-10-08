@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 
-namespace SrtEncoderApp.Interop;
+namespace SimpleSrtEncoder.Interop;
 
 /// <summary>
 /// Hand-written mirrors of native/CaptureCore/include/capturecore/capture_types.h.

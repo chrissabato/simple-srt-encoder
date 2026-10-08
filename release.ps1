@@ -1,7 +1,7 @@
 ﻿#requires -Version 5.1
 <#
 .SYNOPSIS
-    Publishes SrtEncoderApp and packages/uploads it as a Velopack release on GitHub.
+    Publishes SimpleSrtEncoder and packages/uploads it as a Velopack release on GitHub.
 
 .DESCRIPTION
     1. Runs build.ps1 (native + UI), unless -SkipBuild.
@@ -87,9 +87,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = $PSScriptRoot
-$appId = 'SrtEncoderApp'
-$csproj = "$repoRoot/ui/SrtEncoderApp/SrtEncoderApp.csproj"
-$publishDir = "$repoRoot/ui/SrtEncoderApp/bin/Release/net10.0-windows10.0.26100.0/win-x64/publish"
+$appId = 'SimpleSrtEncoder'
+$csproj = "$repoRoot/ui/SimpleSrtEncoder/SimpleSrtEncoder.csproj"
+$publishDir = "$repoRoot/ui/SimpleSrtEncoder/bin/Release/net10.0-windows10.0.26100.0/win-x64/publish"
 if ($null -eq $AzureTrustedSignFile) {
     $AzureTrustedSignFile = "$repoRoot/azure-trusted-signing-metadata.json"
 }
@@ -135,8 +135,8 @@ Write-Host "==> Publishing win-x64 (self-contained)" -ForegroundColor Cyan
 dotnet publish $csproj -c Release -p:Platform=x64 -p:PublishProfile=win-x64 -p:Version=$Version -p:SelfContained=true -p:WindowsAppSDKSelfContained=true
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-if (-not (Test-Path "$publishDir/SrtEncoderApp.exe")) {
-    throw "Publish output not found at $publishDir — check the PublishProfile/paths above still match SrtEncoderApp.csproj."
+if (-not (Test-Path "$publishDir/SimpleSrtEncoder.exe")) {
+    throw "Publish output not found at $publishDir — check the PublishProfile/paths above still match SimpleSrtEncoder.csproj."
 }
 
 Write-Host "==> Packaging with vpk ($Version)" -ForegroundColor Cyan
@@ -145,7 +145,7 @@ $packArgs = @(
     '--packId', $appId
     '--packVersion', $Version
     '--packDir', $publishDir
-    '--mainExe', 'SrtEncoderApp.exe'
+    '--mainExe', 'SimpleSrtEncoder.exe'
     '--outputDir', $OutputDir
 )
 if ($AzureTrustedSignFile -and (Test-Path $AzureTrustedSignFile)) {

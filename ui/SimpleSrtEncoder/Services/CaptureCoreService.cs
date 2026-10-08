@@ -1,7 +1,7 @@
-using SrtEncoderApp.Interop;
-using SrtEncoderApp.Models;
+using SimpleSrtEncoder.Interop;
+using SimpleSrtEncoder.Models;
 
-namespace SrtEncoderApp.Services;
+namespace SimpleSrtEncoder.Services;
 
 /// <summary>
 /// .NET-friendly wrapper around CaptureCore.dll's C ABI (NativeMethods). Owns one

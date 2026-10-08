@@ -1,9 +1,9 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using SrtEncoderApp.Models;
+using SimpleSrtEncoder.Models;
 
-namespace SrtEncoderApp.Services;
+namespace SimpleSrtEncoder.Services;
 
 /// <summary>
 /// Loads/saves Preset JSON files under %LOCALAPPDATA%\SrtEncoder\Presets. Preset schema
@@ -13,7 +13,7 @@ namespace SrtEncoderApp.Services;
 /// Plain reflection-based JsonSerializer.Serialize/Deserialize&lt;Preset&gt; — a
 /// source-generated JsonSerializerContext was tried on 2026-10-07 to support this app's
 /// trimmed Release publish, but trimming itself turned out to be the real problem (see
-/// SrtEncoderApp.csproj's PublishTrimmed comment) and has been disabled, so the
+/// SimpleSrtEncoder.csproj's PublishTrimmed comment) and has been disabled, so the
 /// source-gen workaround is no longer needed.
 /// </summary>
 internal sealed class PresetService

@@ -1,7 +1,7 @@
 #pragma once
 
 // Flat C ABI surface for CaptureCore.dll, consumed from C# via P/Invoke
-// (see ui/SrtEncoderApp/Interop/NativeMethods.cs). Structs and primitives only cross
+// (see ui/SimpleSrtEncoder/Interop/NativeMethods.cs). Structs and primitives only cross
 // this boundary, never C++ classes; see capture_types.h for the shared struct/enum
 // definitions.
 

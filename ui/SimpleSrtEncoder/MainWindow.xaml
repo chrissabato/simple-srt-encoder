@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="utf-8" ?>
 <Window
-    x:Class="SrtEncoderApp.MainWindow"
+    x:Class="SimpleSrtEncoder.MainWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-    xmlns:local="using:SrtEncoderApp"
+    xmlns:local="using:SimpleSrtEncoder"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-    Title="SrtEncoderApp"
+    Title="SimpleSRT Encoder"
     mc:Ignorable="d">
     <Window.SystemBackdrop>
         <MicaBackdrop />
@@ -18,7 +18,7 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <TitleBar x:Name="AppTitleBar" Title="SrtEncoderApp">
+        <TitleBar x:Name="AppTitleBar" Title="SimpleSRT Encoder">
             <TitleBar.IconSource>
                 <ImageIconSource ImageSource="Assets/AppIcon.ico" />
             </TitleBar.IconSource>

@@ -8,7 +8,7 @@ native/vendor/*
 *.zip
 
 # FFmpeg binary, fetched by tools/ffmpeg/fetch-ffmpeg.ps1 — licensed, not committed
-ui/SrtEncoderApp/ffmpeg/
+ui/SimpleSrtEncoder/ffmpeg/
 
 # Velopack release output (release.ps1) — built artifacts, not source
 /releases/
@@ -21,7 +21,7 @@ ui/SrtEncoderApp/ffmpeg/
 *.user
 *.suo
 
-# .NET (root-level catch-all; ui/SrtEncoderApp/.gitignore also covers this locally)
+# .NET (root-level catch-all; ui/SimpleSrtEncoder/.gitignore also covers this locally)
 [Bb]in/
 [Oo]bj/
 

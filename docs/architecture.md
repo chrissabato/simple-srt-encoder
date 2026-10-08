@@ -2,11 +2,11 @@
 
 See the project plan for full context. Summary of the load-bearing decisions:
 
-- **UI**: WinUI 3 (`ui/SrtEncoderApp`), chosen over WPF for `SwapChainPanel` +
+- **UI**: WinUI 3 (`ui/SimpleSrtEncoder`), chosen over WPF for `SwapChainPanel` +
   `ISwapChainPanelNative`, which gives a zero-copy GPU preview path (Phase 1.5).
 - **Native core**: `native/CaptureCore` builds `CaptureCore.dll`, a flat C ABI
   (`capturecore_api.h`) consumed from C# via `[LibraryImport]`/P/Invoke
-  (`ui/SrtEncoderApp/Interop/NativeMethods.cs`). Structs cross the boundary, not classes.
+  (`ui/SimpleSrtEncoder/Interop/NativeMethods.cs`). Structs cross the boundary, not classes.
 - **Capture backends**: `ICaptureSource` / `ICaptureDeviceEnumerator` (added Phase 1).
   UVC via Media Foundation always builds. DeckLink/NDI are optional — gated in
   `native/CaptureCore/CMakeLists.txt` by `ENABLE_DECKLINK`/`ENABLE_NDI` (AUTO-detected via
@@ -18,7 +18,7 @@ See the project plan for full context. Summary of the load-bearing decisions:
   named pipe, targeting FFmpeg's built-in `srt://` muxer. Live setting changes = a
   controlled stop/restart of the ffmpeg process.
 - **Presets**: JSON under `%LOCALAPPDATA%\SrtEncoder\Presets\<guid>.json`, all
-  persistence/schema logic in C# (`ui/SrtEncoderApp/Services/PresetService.cs`, Phase 1);
+  persistence/schema logic in C# (`ui/SimpleSrtEncoder/Services/PresetService.cs`, Phase 1);
   the native ABI only ever sees plain setting structs, so preset schema can evolve
   independently.
 - **Distribution/updates**: Velopack, not MSIX — this app may ship externally (not just
@@ -59,7 +59,7 @@ Two separate build systems, tied together by `build.ps1` at the repo root:
 
 - `native/` — CMake (presets in `native/CMakePresets.json`; requires the VS "Desktop
   development with C++" workload).
-- `ui/SrtEncoderApp/` — `dotnet build`. Its `CopyNativeCore` MSBuild target copies
+- `ui/SimpleSrtEncoder/` — `dotnet build`. Its `CopyNativeCore` MSBuild target copies
   `CaptureCore.dll` from the native build output into the app's output directory after
   each build; run `native/`'s build first (or via `build.ps1`, which does both in order).
 

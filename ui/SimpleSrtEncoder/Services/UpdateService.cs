@@ -1,7 +1,7 @@
 using Velopack;
 using Velopack.Sources;
 
-namespace SrtEncoderApp.Services;
+namespace SimpleSrtEncoder.Services;
 
 /// <summary>
 /// Thin wrapper around Velopack's UpdateManager. IsAvailable is false (and every other

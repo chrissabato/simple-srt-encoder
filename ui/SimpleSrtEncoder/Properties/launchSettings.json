@@ -1,9 +1,9 @@
 {
   "profiles": {
-    "SrtEncoderApp (Package)": {
+    "SimpleSrtEncoder (Package)": {
       "commandName": "MsixPackage"
     },
-    "SrtEncoderApp (Unpackaged)": {
+    "SimpleSrtEncoder (Unpackaged)": {
       "commandName": "Project"
     }
   }

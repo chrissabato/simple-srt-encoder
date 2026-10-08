@@ -1,6 +1,6 @@
 using Microsoft.Win32.SafeHandles;
 
-namespace SrtEncoderApp.Interop;
+namespace SimpleSrtEncoder.Interop;
 
 /// <summary>
 /// Owns the lifetime of one native CaptureManager instance (CaptureCore_Create /

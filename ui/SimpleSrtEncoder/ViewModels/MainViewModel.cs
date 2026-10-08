@@ -1,9 +1,9 @@
 using System.Collections.ObjectModel;
-using SrtEncoderApp.Models;
-using SrtEncoderApp.Services;
+using SimpleSrtEncoder.Models;
+using SimpleSrtEncoder.Services;
 using Velopack;
 
-namespace SrtEncoderApp.ViewModels;
+namespace SimpleSrtEncoder.ViewModels;
 
 /// <summary>
 /// Holds all editable state for the single-page Phase 1 UI (device selection, encode
@@ -262,6 +262,16 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public void RefreshLoudness() => Loudness = _captureCore.GetLoudness();
 
     public void ResetLoudness() => _captureCore.ResetLoudness();
+
+    // Matches CC_EMBEDDED_AUDIO_DEVICE_ID in capture_types.h.
+    private const string EmbeddedAudioDeviceId = "embedded";
+
+    // Embedded audio (e.g. DeckLink SDI/HDMI audio) has a single consumer — the streaming
+    // pump — so CaptureManager::StartAudioMonitor can only configure the meter for it, not
+    // feed it PCM, until a stream is actually running. Every other audio device meters
+    // independently of streaming (see UpdateAudioMonitor above).
+    public bool MeterAwaitingStream =>
+        AudioEnabled && SelectedAudioDevice?.DeviceId == EmbeddedAudioDeviceId && !IsStreaming;
 
     // The meter runs whenever audio is enabled and a device is chosen, not only while
     // streaming, so levels can be checked before going live.

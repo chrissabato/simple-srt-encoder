@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-    Downloads two static Windows ffmpeg builds into ui/SrtEncoderApp/ffmpeg/:
+    Downloads two static Windows ffmpeg builds into ui/SimpleSrtEncoder/ffmpeg/:
     ffmpeg.exe (primary) and ffmpeg-legacy-nvenc.exe (NVENC compatibility fallback).
 
 .DESCRIPTION
@@ -41,7 +41,7 @@ param(
 $ErrorActionPreference = 'Stop'
 # This script lives at tools/ffmpeg/ — up two levels, not one, to reach the repo root.
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$destDir = Join-Path $repoRoot "ui\SrtEncoderApp\ffmpeg"
+$destDir = Join-Path $repoRoot "ui\SimpleSrtEncoder\ffmpeg"
 New-Item -ItemType Directory -Force -Path $destDir | Out-Null
 
 function Get-FfmpegBuild {

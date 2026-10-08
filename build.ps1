@@ -9,8 +9,8 @@
     MSBuild C# project integrations don't compose cleanly.
 
     1. Configures + builds native/CaptureCore via CMake presets.
-    2. Builds ui/SrtEncoderApp via `dotnet build`, which copies the resulting
-       CaptureCore.dll into the app's output directory (see SrtEncoderApp.csproj's
+    2. Builds ui/SimpleSrtEncoder via `dotnet build`, which copies the resulting
+       CaptureCore.dll into the app's output directory (see SimpleSrtEncoder.csproj's
        CopyNativeCore target).
 
 .PARAMETER Configuration
@@ -95,8 +95,8 @@ else {
     Write-Host "==> Skipping native build (-SkipNative)" -ForegroundColor Yellow
 }
 
-Write-Host "==> Building ui/SrtEncoderApp ($Configuration)" -ForegroundColor Cyan
-dotnet build "$repoRoot/ui/SrtEncoderApp/SrtEncoderApp.csproj" -c $Configuration -p:Platform=x64
+Write-Host "==> Building ui/SimpleSrtEncoder ($Configuration)" -ForegroundColor Cyan
+dotnet build "$repoRoot/ui/SimpleSrtEncoder/SimpleSrtEncoder.csproj" -c $Configuration -p:Platform=x64
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "==> Done." -ForegroundColor Green

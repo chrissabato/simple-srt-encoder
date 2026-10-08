@@ -1,4 +1,4 @@
-namespace SrtEncoderApp.Models;
+namespace SimpleSrtEncoder.Models;
 
 /// <summary>
 /// Persisted as JSON at %LOCALAPPDATA%\SrtEncoder\Presets\&lt;Id&gt;.json (see

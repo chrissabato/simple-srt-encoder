@@ -1,4 +1,4 @@
-namespace SrtEncoderApp.Models;
+namespace SimpleSrtEncoder.Models;
 
 public sealed record CaptureDeviceInfo(string Backend, string DeviceId, string DisplayName)
 {

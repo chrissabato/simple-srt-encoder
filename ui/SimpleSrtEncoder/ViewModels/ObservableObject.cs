@@ -1,7 +1,7 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 
-namespace SrtEncoderApp.ViewModels;
+namespace SimpleSrtEncoder.ViewModels;
 
 public abstract class ObservableObject : INotifyPropertyChanged
 {

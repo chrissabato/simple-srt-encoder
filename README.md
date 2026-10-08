@@ -1,4 +1,4 @@
-# SRT Encoder
+# SimpleSRT Encoder
 
 A Windows desktop app for live SRT streaming from UVC, Blackmagic DeckLink, and NDI video
 sources, with a live preview and saved presets. See `docs/architecture.md` for the design.
@@ -22,7 +22,7 @@ encode/SRT, and preset functionality land in Phase 1.
 ## Build
 
 ```powershell
-./build.ps1                  # builds native/ then ui/SrtEncoderApp (Debug)
+./build.ps1                  # builds native/ then ui/SimpleSrtEncoder (Debug)
 ./build.ps1 -Configuration Release
 ./build.ps1 -SkipNative      # UI only, if the C++ toolchain isn't installed
 ```
@@ -30,7 +30,7 @@ encode/SRT, and preset functionality land in Phase 1.
 ## Run
 
 ```powershell
-dotnet run --project ui/SrtEncoderApp/SrtEncoderApp.csproj
+dotnet run --project ui/SimpleSrtEncoder/SimpleSrtEncoder.csproj
 ```
 
 ## Optional capture backends

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8" ?>
 <UserControl
-    x:Class="SrtEncoderApp.LoudnessMeterControl"
+    x:Class="SimpleSrtEncoder.LoudnessMeterControl"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
@@ -10,7 +10,8 @@
         Padding="12,8"
         Margin="12"
         MinWidth="280">
-        <StackPanel Spacing="6">
+        <Grid>
+        <StackPanel x:Name="ContentPanel" Spacing="6">
             <Grid>
                 <TextBlock Text="LOUDNESS" Foreground="#B3FFFFFF" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center" />
                 <Button
@@ -30,6 +31,12 @@
                 Value="-50"
                 Height="8"
                 Background="#33FFFFFF" />
+
+            <Canvas x:Name="HistoryCanvas" Height="36" Background="#1AFFFFFF" SizeChanged="HistoryCanvas_SizeChanged">
+                <Line x:Name="TargetLine" Stroke="#99FFFFFF" StrokeThickness="1" StrokeDashArray="2,2" />
+                <TextBlock x:Name="TargetLabel" Text="-24 LUFS TARGET" Foreground="#99FFFFFF" FontSize="8" />
+                <Polyline x:Name="HistoryLine" Stroke="#3FC16E" StrokeThickness="1.5" />
+            </Canvas>
 
             <Grid ColumnSpacing="12">
                 <Grid.ColumnDefinitions>
@@ -56,5 +63,22 @@
                 </StackPanel>
             </Grid>
         </StackPanel>
+
+        <Border
+            x:Name="AwaitingStreamOverlay"
+            Background="#CC000000"
+            CornerRadius="4"
+            Visibility="Collapsed">
+            <TextBlock
+                Text="Embedded audio only meters once the stream starts"
+                Foreground="White"
+                FontSize="11"
+                TextWrapping="Wrap"
+                TextAlignment="Center"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                Margin="16" />
+        </Border>
+        </Grid>
     </Border>
 </UserControl>
