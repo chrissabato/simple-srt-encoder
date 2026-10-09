@@ -231,7 +231,12 @@
                         <x:String>listener</x:String>
                         <x:String>rendezvous</x:String>
                     </ComboBox>
-                    <TextBox Header="Host" Text="{x:Bind ViewModel.Host, Mode=TwoWay}" />
+                    <TextBox
+                        x:Name="HostBox"
+                        Header="Host"
+                        PlaceholderText="host, or paste a full srt:// URL"
+                        Text="{x:Bind ViewModel.Host, Mode=TwoWay}"
+                        TextChanged="HostBox_TextChanged" />
                     <NumberBox Header="Port" Value="{x:Bind ViewModel.Port, Mode=TwoWay}" SpinButtonPlacementMode="Compact" Minimum="1" Maximum="65535" />
                     <NumberBox Header="Latency (ms)" Value="{x:Bind ViewModel.LatencyMs, Mode=TwoWay}" SpinButtonPlacementMode="Compact" Minimum="20" />
                     <PasswordBox x:Name="PassphraseBox" Header="Passphrase (leave blank to keep existing)" />

@@ -7,6 +7,7 @@ using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media.Imaging;
 using SimpleSrtEncoder.Interop;
 using SimpleSrtEncoder.Models;
+using SimpleSrtEncoder.Services;
 using SimpleSrtEncoder.ViewModels;
 
 namespace SimpleSrtEncoder;
@@ -164,6 +165,46 @@ public sealed partial class MainPage : Page
         SettingsPanel.Visibility = SettingsToggleButton.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
 
     private void RefreshAudioDevicesButton_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e) => ViewModel.RefreshAudioDevices();
+
+    // Lets a provider's full "srt://host:port?streamid=..." URL be pasted straight into
+    // the Host box instead of requiring it to be split apart by hand. Fires on every
+    // keystroke too, but SrtUrlParser only matches a complete srt:// URL, so normal
+    // typing is a no-op.
+    private void HostBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!SrtUrlParser.TryParse(HostBox.Text, out var parsed))
+        {
+            return;
+        }
+
+        HostBox.Text = parsed.Host;
+        HostBox.SelectionStart = HostBox.Text.Length;
+
+        if (parsed.Port is { } port)
+        {
+            ViewModel.Port = port;
+        }
+        if (parsed.Mode is { } mode)
+        {
+            ViewModel.SrtMode = mode;
+        }
+        if (parsed.StreamId is { } streamId)
+        {
+            ViewModel.StreamId = streamId;
+        }
+        if (parsed.LatencyMs is { } latencyMs)
+        {
+            ViewModel.LatencyMs = latencyMs;
+        }
+        if (parsed.PbKeyLen is { } pbKeyLen)
+        {
+            ViewModel.PbKeyLen = pbKeyLen;
+        }
+        if (parsed.Passphrase is { } passphrase)
+        {
+            PassphraseBox.Password = passphrase;
+        }
+    }
 
     private async void InstallUpdateButton_Click(object sender, RoutedEventArgs e) => await ViewModel.InstallUpdateAndRestartAsync();
 
