@@ -370,6 +370,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             if (SetProperty(ref _isStreaming, value))
             {
                 OnPropertyChanged(nameof(CanEditSettings));
+                Services.SleepPreventionService.Set(value);
             }
         }
     }
