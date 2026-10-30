@@ -183,6 +183,20 @@ std::wstring FfmpegProcessController::BuildCommandLine(
             << L" -i \"" << audio.pipeName << L"\"";
     }
 
+    // Overlay PNG (typically transparent), composited onto the output via the
+    // `overlay` filter below rather than in our own capture/pump threads — ffmpeg
+    // already does a full filter/scale/pixel-format pass on every frame for encoding,
+    // so this piggybacks on work it's doing anyway instead of adding a second
+    // compositing step upstream. -loop 1 makes the still image repeat for the whole
+    // stream duration (plain image2 input would otherwise only ever produce one frame).
+    // Input index is always the last one: 1 if audio is disabled, 2 if enabled (video is
+    // always 0, audio when present is always 1 — see the -i calls above).
+    const bool hasOverlay = encode.overlayImagePath[0] != L'\0';
+    const int32_t overlayInputIndex = audio.enabled ? 2 : 1;
+    if (hasOverlay) {
+        cmd << L" -loop 1 -i \"" << encode.overlayImagePath << L"\"";
+    }
+
     const std::wstring encoderImpl = encode.encoderImpl;
     cmd << L" -c:v \"" << encoderImpl << L"\"";
 
@@ -246,7 +260,33 @@ std::wstring FfmpegProcessController::BuildCommandLine(
     }
     cmd << L" -g " << gop << L" -keyint_min " << gop;
 
-    if (encode.outputWidth > 0 && encode.outputHeight > 0) {
+    const bool wantsScale = encode.outputWidth > 0 && encode.outputHeight > 0;
+    if (hasOverlay) {
+        // Drawn at (0,0) at the overlay's own native resolution, covering the frame
+        // exactly when (as intended — see MainPage's "Add Overlay..." picker) the PNG's
+        // canvas is the same size as the video: the user positions their logo/frame/
+        // lower-third within that canvas themselves, with everything else transparent,
+        // rather than this code guessing a corner/margin to anchor a smaller image at.
+        // Deliberately NOT scaling the overlay to fit here: forcing a non-matching-aspect
+        // image to W:H would distort it, whereas leaving it at native size and compositing
+        // at the origin degrades predictably (just doesn't reach the far edges) instead.
+        // -filter_complex replaces the plain -s output option below (the two aren't
+        // combined — scale happens inside the filter graph instead when requested) and
+        // requires explicit -map for every output stream, since ffmpeg stops
+        // auto-selecting streams once any -map is present.
+        std::wstringstream filter;
+        if (wantsScale) {
+            filter << L"[0:v]scale=" << encode.outputWidth << L":" << encode.outputHeight << L"[v0];"
+                   << L"[v0][" << overlayInputIndex << L":v]overlay=0:0[outv]";
+        } else {
+            filter << L"[0:v][" << overlayInputIndex << L":v]overlay=0:0[outv]";
+        }
+        cmd << L" -filter_complex \"" << filter.str() << L"\""
+            << L" -map \"[outv]\"";
+        if (audio.enabled) {
+            cmd << L" -map 1:a";
+        }
+    } else if (wantsScale) {
         cmd << L" -s " << encode.outputWidth << L"x" << encode.outputHeight;
     }
 

@@ -292,6 +292,17 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private double _audioBitrateKbps = 128;
     public double AudioBitrateKbps { get => _audioBitrateKbps; set => SetProperty(ref _audioBitrateKbps, value); }
 
+    // --- Overlay image ---
+    // Local PNG path, picked via a FileOpenPicker in MainPage.xaml.cs; empty means no
+    // overlay. Deliberately not part of PresetEncode/saved presets — same per-session,
+    // per-machine-path reasoning as the ffmpeg build selection (a saved preset shouldn't
+    // hardcode a path from whichever machine created it). Composited into the stream by
+    // ffmpeg itself (see CaptureCoreService.StartStream/FfmpegProcessController::
+    // BuildCommandLine) and shown in the live preview as a separate XAML layer
+    // (MainPage.xaml) rather than re-blended into preview pixels every tick.
+    private string _overlayImagePath = "";
+    public string OverlayImagePath { get => _overlayImagePath; set => SetProperty(ref _overlayImagePath, value); }
+
     // --- SRT settings ---
     private string _srtMode = "caller";
     public string SrtMode { get => _srtMode; set => SetProperty(ref _srtMode, value); }
@@ -549,7 +560,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             passphrase = PresetService.UnprotectPassphrase(SelectedPreset.Srt.PassphraseProtected);
         }
 
-        var started = _captureCore.StartStream(encode, BuildPresetSrt(), passphrase, ffmpegExeName);
+        var started = _captureCore.StartStream(encode, BuildPresetSrt(), passphrase, ffmpegExeName, OverlayImagePath);
         IsStreaming = started;
         StatusText = started
             ? requestedAuto || !string.IsNullOrEmpty(ffmpegExeName)

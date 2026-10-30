@@ -14,6 +14,7 @@ internal static class NativeStructs
 {
     public const int MaxString = 256;
     public const int MaxShortString = 64;
+    public const int MaxPathString = 512;
 }
 
 internal enum CcBackendType : int
@@ -128,6 +129,11 @@ internal struct CcEncodeSettings
     // CaptureCoreService.ProbeEncoder and MainViewModel.ResolveEncoder.
     [MarshalAs(UnmanagedType.ByValTStr, SizeConst = NativeStructs.MaxShortString)]
     public string FfmpegExeName;
+
+    // Local PNG path composited onto the stream via ffmpeg's own overlay filter; empty
+    // means no overlay. See MainViewModel.OverlayImagePath.
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = NativeStructs.MaxPathString)]
+    public string OverlayImagePath;
 }
 
 [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]

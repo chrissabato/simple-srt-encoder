@@ -186,7 +186,8 @@ internal sealed class CaptureCoreService : IDisposable
 
     /// <param name="plaintextPassphrase">Decrypted just before this call — see PresetService's DPAPI handling. Never logged or persisted by this layer.</param>
     /// <param name="ffmpegExeName">Which ffmpeg\&lt;name&gt;.exe to launch (see MainViewModel.ResolveEncoder); empty for the default "ffmpeg.exe". Not part of PresetEncode — this is a per-machine resolution detail, not something a portable preset should hardcode.</param>
-    public bool StartStream(PresetEncode encode, PresetSrt srt, string plaintextPassphrase, string ffmpegExeName = "")
+    /// <param name="overlayImagePath">Local PNG path to composite onto the stream via ffmpeg's overlay filter; empty for no overlay. Not part of PresetEncode — see MainViewModel.OverlayImagePath.</param>
+    public bool StartStream(PresetEncode encode, PresetSrt srt, string plaintextPassphrase, string ffmpegExeName = "", string overlayImagePath = "")
     {
         if (!IsAvailable)
         {
@@ -215,6 +216,7 @@ internal sealed class CaptureCoreService : IDisposable
             AudioEnabled = encode.AudioEnabled ? 1 : 0,
             AudioBitrateKbps = encode.AudioBitrateKbps,
             AudioDeviceId = new CcDeviceId { Value = TruncateForNativeBuffer(encode.AudioDeviceId, NativeStructs.MaxString) },
+            OverlayImagePath = TruncateForNativeBuffer(overlayImagePath ?? "", NativeStructs.MaxPathString),
         };
 
         var srtNative = new CcSrtSettings

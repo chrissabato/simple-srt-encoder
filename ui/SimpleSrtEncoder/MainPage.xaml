@@ -27,6 +27,11 @@
                 <Border Background="{ThemeResource LayerFillColorDefaultBrush}" CornerRadius="4" DoubleTapped="PreviewBorder_DoubleTapped">
                     <Image x:Name="PreviewImage" Stretch="Uniform" />
                 </Border>
+                <Image
+                    x:Name="OverlayPreviewImage"
+                    Stretch="Uniform"
+                    IsHitTestVisible="False"
+                    Source="{x:Bind BuildOverlaySource(ViewModel.OverlayImagePath), Mode=OneWay}" />
                 <InfoBar
                     HorizontalAlignment="Stretch"
                     VerticalAlignment="Top"
@@ -89,16 +94,23 @@
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <TextBlock Grid.Column="0" Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" Opacity="0.7" TextTrimming="CharacterEllipsis" />
-                <ToggleButton Grid.Column="1" x:Name="SettingsToggleButton" Click="SettingsToggleButton_Click">
+                <Button
+                    Grid.Column="1"
+                    x:Name="OverlayButton"
+                    Content="{x:Bind FormatOverlayButtonContent(ViewModel.OverlayImagePath), Mode=OneWay}"
+                    ToolTipService.ToolTip="Composite a transparent PNG onto the preview and stream"
+                    Click="OverlayButton_Click" />
+                <ToggleButton Grid.Column="2" x:Name="SettingsToggleButton" Click="SettingsToggleButton_Click">
                     <StackPanel Orientation="Horizontal" Spacing="6">
                         <FontIcon Glyph="&#xE713;" FontSize="14" />
                         <TextBlock Text="Settings" />
                     </StackPanel>
                 </ToggleButton>
                 <ComboBox
-                    Grid.Column="2"
+                    Grid.Column="3"
                     x:Name="PresetComboBox"
                     Width="180"
                     PlaceholderText="Preset..."
@@ -113,7 +125,7 @@
                     </ComboBox.ItemTemplate>
                 </ComboBox>
                 <Button
-                    Grid.Column="3"
+                    Grid.Column="4"
                     x:Name="StreamToggleButton"
                     Content="{x:Bind FormatStreamButtonContent(ViewModel.IsStreaming), Mode=OneWay}"
                     Click="StreamToggleButton_Click"
@@ -294,6 +306,11 @@
         KeyDown="FullscreenOverlay_KeyDown"
         DoubleTapped="FullscreenOverlay_DoubleTapped">
         <Image x:Name="FullscreenPreviewImage" Stretch="Uniform" />
+        <Image
+            x:Name="FullscreenOverlayPreviewImage"
+            Stretch="Uniform"
+            IsHitTestVisible="False"
+            Source="{x:Bind BuildOverlaySource(ViewModel.OverlayImagePath), Mode=OneWay}" />
         <local:LoudnessMeterControl
             x:Name="FullscreenMeter"
             HorizontalAlignment="Left"

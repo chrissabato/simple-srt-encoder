@@ -9,6 +9,8 @@ using SimpleSrtEncoder.Interop;
 using SimpleSrtEncoder.Models;
 using SimpleSrtEncoder.Services;
 using SimpleSrtEncoder.ViewModels;
+using Windows.Storage.Pickers;
+using WinRT.Interop;
 
 namespace SimpleSrtEncoder;
 
@@ -166,6 +168,29 @@ public sealed partial class MainPage : Page
 
     private void RefreshAudioDevicesButton_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e) => ViewModel.RefreshAudioDevices();
 
+    // Toggle: clears the overlay if one is already set, otherwise opens a picker for a
+    // local PNG. FileOpenPicker requires a owner window handle on a WinUI3 desktop app
+    // (no implicit one like on UWP) — see MainWindow's own WindowNative usage for the
+    // same pattern (EnterFullscreen/ExitFullscreen).
+    private async void OverlayButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!string.IsNullOrEmpty(ViewModel.OverlayImagePath))
+        {
+            ViewModel.OverlayImagePath = string.Empty;
+            return;
+        }
+
+        var picker = new FileOpenPicker();
+        picker.FileTypeFilter.Add(".png");
+        InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(App.MainWindow!));
+
+        var file = await picker.PickSingleFileAsync();
+        if (file is not null)
+        {
+            ViewModel.OverlayImagePath = file.Path;
+        }
+    }
+
     // Lets a provider's full "srt://host:port?streamid=..." URL be pasted straight into
     // the Host box instead of requiring it to be split apart by hand. Fires on every
     // keystroke too, but SrtUrlParser only matches a complete srt:// URL, so normal
@@ -303,6 +328,18 @@ public sealed partial class MainPage : Page
     }
 
     private bool IsNotNull(object? value) => value is not null;
+
+    private string FormatOverlayButtonContent(string path) => string.IsNullOrEmpty(path) ? "Add Overlay..." : "Remove Overlay";
+
+    // BitmapImage(Uri) loads asynchronously on its own; no need to await here. Returning
+    // null (rather than an empty Uri) for the no-overlay case leaves the bound Image with
+    // nothing to render — simpler than a separate Visibility binding, and avoids a
+    // XamlCompiler codegen bug hit when the identical IsOverlaySet(...) boolean->Visibility
+    // x:Bind expression is reused across two elements (preview + fullscreen) on this page:
+    // it emitted a cast helper referencing an undeclared `obj` local (MainPage.g.cs,
+    // "error CS0103: The name 'obj' does not exist in the current context"). Confirmed by
+    // removing the duplicate Visibility bindings, which fixed the build.
+    private BitmapImage? BuildOverlaySource(string path) => string.IsNullOrEmpty(path) ? null : new BitmapImage(new Uri(path));
 
     private string FormatConnectionState(ConnectionState state) => state.ToString();
     private string FormatBitrate(double kbps) => $"{kbps:0} kbps";

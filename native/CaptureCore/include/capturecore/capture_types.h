@@ -45,6 +45,7 @@ enum class CcConnectionState : int32_t {
 
 constexpr int32_t CC_MAX_STRING = 256;
 constexpr int32_t CC_MAX_SHORT_STRING = 64;
+constexpr int32_t CC_MAX_PATH_STRING = 512; // wider than CC_MAX_STRING: local file paths can exceed it
 
 // Sentinel audio device ID meaning "use the open video source's own embedded audio"
 // (DeckLink SDI/HDMI audio) instead of a WASAPI endpoint. Mirrored in the C# UI layer.
@@ -112,6 +113,15 @@ struct CcEncodeSettings {
     // fallback for GPUs too old for the primary build's NVENC API requirement (see
     // CaptureCore_ProbeEncoder and tools/ffmpeg/fetch-ffmpeg.ps1).
     wchar_t ffmpegExeName[CC_MAX_SHORT_STRING];
+
+    // Local path to a (typically transparent) PNG composited onto the output at (0,0)
+    // via ffmpeg's own `overlay` filter — see FfmpegProcessController::BuildCommandLine.
+    // Intended to be the same canvas size as the video, with the user's logo/frame/
+    // lower-third positioned within it and everything else transparent. Empty string
+    // means no overlay. The live preview draws the same file as a plain XAML layer
+    // (MainPage.xaml) instead of compositing pixels on the C# side — this field only
+    // ever affects the encoded/streamed output.
+    wchar_t overlayImagePath[CC_MAX_PATH_STRING];
 };
 
 struct CcSrtSettings {
