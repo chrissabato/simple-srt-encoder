@@ -262,25 +262,34 @@ std::wstring FfmpegProcessController::BuildCommandLine(
 
     const bool wantsScale = encode.outputWidth > 0 && encode.outputHeight > 0;
     if (hasOverlay) {
-        // Drawn at (0,0) at the overlay's own native resolution, covering the frame
-        // exactly when (as intended — see MainPage's "Add Overlay..." picker) the PNG's
-        // canvas is the same size as the video: the user positions their logo/frame/
-        // lower-third within that canvas themselves, with everything else transparent,
-        // rather than this code guessing a corner/margin to anchor a smaller image at.
-        // Deliberately NOT scaling the overlay to fit here: forcing a non-matching-aspect
-        // image to W:H would distort it, whereas leaving it at native size and compositing
-        // at the origin degrades predictably (just doesn't reach the far edges) instead.
-        // -filter_complex replaces the plain -s output option below (the two aren't
-        // combined — scale happens inside the filter graph instead when requested) and
-        // requires explicit -map for every output stream, since ffmpeg stops
-        // auto-selecting streams once any -map is present.
+        // Scaled to exactly match the base video's own output canvas, then drawn at
+        // (0,0): the PNG's *content* is positioned by the user within their own canvas
+        // (logo/frame/lower-third wherever they put it, everything else transparent),
+        // but that canvas isn't guaranteed to already be pixel-for-pixel the frame size
+        // — e.g. a logo authored at 4K for a 1080p stream. Compositing it at native
+        // resolution instead of scaling first (an earlier version of this code) clips
+        // anything outside the base frame's top-left corner, which silently hides overlay
+        // content positioned anywhere else (confirmed: a logo in the top-right of a
+        // 3840x2160 PNG never appeared in a 1920x1080 stream, while the XAML preview
+        // looked fine because Stretch="Uniform" scales the whole image to fit regardless
+        // of native size). Scaling both the same width/height does distort an overlay
+        // whose own aspect ratio doesn't match the video, but that's a predictable,
+        // visible tradeoff — unlike silently dropping the overlay outside the frame
+        // entirely, which is what native-size compositing does for the common case of a
+        // same-aspect, different-resolution asset. -filter_complex replaces the plain -s
+        // output option below (the two aren't combined — scale happens inside the filter
+        // graph instead when requested) and requires explicit -map for every output
+        // stream, since ffmpeg stops auto-selecting streams once any -map is present.
+        const int32_t targetWidth = wantsScale ? encode.outputWidth : sourceWidth;
+        const int32_t targetHeight = wantsScale ? encode.outputHeight : sourceHeight;
         std::wstringstream filter;
         if (wantsScale) {
-            filter << L"[0:v]scale=" << encode.outputWidth << L":" << encode.outputHeight << L"[v0];"
-                   << L"[v0][" << overlayInputIndex << L":v]overlay=0:0[outv]";
+            filter << L"[0:v]scale=" << targetWidth << L":" << targetHeight << L"[v0];";
         } else {
-            filter << L"[0:v][" << overlayInputIndex << L":v]overlay=0:0[outv]";
+            filter << L"[0:v]copy[v0];";
         }
+        filter << L"[" << overlayInputIndex << L":v]scale=" << targetWidth << L":" << targetHeight << L"[ov];"
+               << L"[v0][ov]overlay=0:0[outv]";
         cmd << L" -filter_complex \"" << filter.str() << L"\""
             << L" -map \"[outv]\"";
         if (audio.enabled) {
