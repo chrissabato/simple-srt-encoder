@@ -186,7 +186,7 @@ internal sealed class CaptureCoreService : IDisposable
 
     /// <param name="plaintextPassphrase">Decrypted just before this call — see PresetService's DPAPI handling. Never logged or persisted by this layer.</param>
     /// <param name="ffmpegExeName">Which ffmpeg\&lt;name&gt;.exe to launch (see MainViewModel.ResolveEncoder); empty for the default "ffmpeg.exe". Not part of PresetEncode — this is a per-machine resolution detail, not something a portable preset should hardcode.</param>
-    /// <param name="overlayImagePath">Local PNG path to composite onto the stream via ffmpeg's overlay filter; empty for no overlay. Not part of PresetEncode — see MainViewModel.OverlayImagePath.</param>
+    /// <param name="overlayImagePath">Local PNG path to composite onto the stream via ffmpeg's overlay filter; empty for no overlay. Baked into the ffmpeg command line at stream start, so changing it mid-stream has no effect — see PresetEncode.OverlayImagePath.</param>
     public bool StartStream(PresetEncode encode, PresetSrt srt, string plaintextPassphrase, string ffmpegExeName = "", string overlayImagePath = "")
     {
         if (!IsAvailable)

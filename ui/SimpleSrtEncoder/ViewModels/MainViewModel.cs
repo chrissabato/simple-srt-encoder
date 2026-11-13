@@ -294,12 +294,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     // --- Overlay image ---
     // Local PNG path, picked via a FileOpenPicker in MainPage.xaml.cs; empty means no
-    // overlay. Deliberately not part of PresetEncode/saved presets — same per-session,
-    // per-machine-path reasoning as the ffmpeg build selection (a saved preset shouldn't
-    // hardcode a path from whichever machine created it). Composited into the stream by
-    // ffmpeg itself (see CaptureCoreService.StartStream/FfmpegProcessController::
-    // BuildCommandLine) and shown in the live preview as a separate XAML layer
-    // (MainPage.xaml) rather than re-blended into preview pixels every tick.
+    // overlay. Saved in PresetEncode.OverlayImagePath (same per-machine-path caveat as
+    // Source.DeviceId/DeviceName — ApplyPreset below drops it if the file no longer
+    // exists). Composited into the stream by ffmpeg itself (see
+    // CaptureCoreService.StartStream/FfmpegProcessController::BuildCommandLine) and shown
+    // in the live preview as a separate XAML layer (MainPage.xaml) rather than
+    // re-blended into preview pixels every tick.
     private string _overlayImagePath = "";
     public string OverlayImagePath { get => _overlayImagePath; set => SetProperty(ref _overlayImagePath, value); }
 
@@ -633,6 +633,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             // be unplugged) — same convention as the video SelectedDevice match above.
             SelectedAudioDevice = AudioDevices.FirstOrDefault(d => d.DeviceId == preset.Encode.AudioDeviceId);
 
+            // Same per-machine caveat as the device matches above: drop a path that
+            // doesn't exist on this machine rather than pointing the preview/ffmpeg at a
+            // missing file.
+            OverlayImagePath = File.Exists(preset.Encode.OverlayImagePath) ? preset.Encode.OverlayImagePath : "";
+
             SrtMode = preset.Srt.Mode;
             Host = preset.Srt.Host;
             Port = preset.Srt.Port;
@@ -751,6 +756,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             AudioDeviceId = SelectedAudioDevice?.DeviceId ?? "",
             AudioDeviceName = SelectedAudioDevice?.DisplayName ?? "",
             AudioBitrateKbps = (int)AudioBitrateKbps,
+            OverlayImagePath = OverlayImagePath,
         };
     }
 

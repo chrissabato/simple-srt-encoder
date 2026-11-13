@@ -55,6 +55,14 @@ public sealed class PresetEncode
     public string AudioDeviceId { get; set; } = "";
     public string AudioDeviceName { get; set; } = "";
     public int AudioBitrateKbps { get; set; } = 128;
+
+    /// <summary>
+    /// Local PNG path for the stream overlay. Same per-machine-path caveat as
+    /// Source.DeviceId/DeviceName above: a preset created on one machine may point at a
+    /// file that doesn't exist on another, so loading it is tolerant of a missing file
+    /// (see MainViewModel.ApplyPreset).
+    /// </summary>
+    public string OverlayImagePath { get; set; } = "";
 }
 
 public sealed class PresetSrt

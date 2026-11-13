@@ -94,23 +94,16 @@
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <TextBlock Grid.Column="0" Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" Opacity="0.7" TextTrimming="CharacterEllipsis" />
-                <Button
-                    Grid.Column="1"
-                    x:Name="OverlayButton"
-                    Content="{x:Bind FormatOverlayButtonContent(ViewModel.OverlayImagePath), Mode=OneWay}"
-                    ToolTipService.ToolTip="Composite a transparent PNG onto the preview and stream"
-                    Click="OverlayButton_Click" />
-                <ToggleButton Grid.Column="2" x:Name="SettingsToggleButton" Click="SettingsToggleButton_Click">
+                <ToggleButton Grid.Column="1" x:Name="SettingsToggleButton" Click="SettingsToggleButton_Click">
                     <StackPanel Orientation="Horizontal" Spacing="6">
                         <FontIcon Glyph="&#xE713;" FontSize="14" />
                         <TextBlock Text="Settings" />
                     </StackPanel>
                 </ToggleButton>
                 <ComboBox
-                    Grid.Column="3"
+                    Grid.Column="2"
                     x:Name="PresetComboBox"
                     Width="180"
                     PlaceholderText="Preset..."
@@ -125,7 +118,7 @@
                     </ComboBox.ItemTemplate>
                 </ComboBox>
                 <Button
-                    Grid.Column="4"
+                    Grid.Column="3"
                     x:Name="StreamToggleButton"
                     Content="{x:Bind FormatStreamButtonContent(ViewModel.IsStreaming), Mode=OneWay}"
                     Click="StreamToggleButton_Click"
@@ -159,6 +152,15 @@
                         SelectedItem="{x:Bind ViewModel.SelectedDevice, Mode=TwoWay}"
                         DropDownOpened="DeviceComboBox_DropDownOpened"
                         SelectionChanged="DeviceComboBox_SelectionChanged" />
+                </StackPanel>
+
+                <StackPanel Spacing="8">
+                    <TextBlock Text="Overlay" Style="{StaticResource SubtitleTextBlockStyle}" />
+                    <Button
+                        x:Name="OverlayButton"
+                        Content="{x:Bind FormatOverlayButtonContent(ViewModel.OverlayImagePath), Mode=OneWay}"
+                        ToolTipService.ToolTip="Composite a transparent PNG onto the preview and stream"
+                        Click="OverlayButton_Click" />
                 </StackPanel>
 
                 <StackPanel Spacing="8">
